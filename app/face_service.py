@@ -13,6 +13,8 @@ from sqlalchemy import text
 from app.config import (
     IMAGES_DIR, FACE_MODEL, DETECTOR_BACKEND, COSINE_THRESHOLD,
     FRAME_UPSCALE_TARGET, FACE_CONFIDENCE_MIN, FACE_MIN_PIXELS,
+    TOP_K_MATCHES, MATCH_MARGIN_MIN, STUDENT_AGG_TOP_N,
+    QUALITY_FACE_SIZE_GOOD, QUALITY_FACE_SIZE_MIN, QUALITY_THRESHOLD_PENALTY,
 )
 from app.models import Student, StudentPhoto, AttendanceSession, AttendanceRecord
 
@@ -158,9 +160,56 @@ def _enhance_face_crop(face_img: np.ndarray) -> np.ndarray:
     return sharpened
 
 
+def _compute_face_quality(face_img: np.ndarray, original_face_size: int) -> float:
+    """
+    Tính điểm chất lượng khuôn mặt [0.0 → 1.0].
+
+    Dựa trên 2 yếu tố:
+    - Kích thước mặt trong frame gốc (trước upscale)
+    - Độ sắc nét (Laplacian variance)
+
+    quality thấp → cần threshold cao hơn để tránh nhầm.
+    """
+    # 1. Size factor: face < 40px → 0.0, face >= 120px → 1.0
+    if original_face_size >= QUALITY_FACE_SIZE_GOOD:
+        size_factor = 1.0
+    elif original_face_size <= QUALITY_FACE_SIZE_MIN:
+        size_factor = 0.0
+    else:
+        size_factor = (original_face_size - QUALITY_FACE_SIZE_MIN) / (
+            QUALITY_FACE_SIZE_GOOD - QUALITY_FACE_SIZE_MIN
+        )
+
+    # 2. Sharpness factor: Laplacian variance (normalized)
+    if face_img is not None and face_img.size > 0:
+        gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY) if len(face_img.shape) == 3 else face_img
+        lap_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+        # lap_var < 30 → rất mờ, > 200 → rất nét
+        sharpness_factor = min(1.0, max(0.0, (lap_var - 20) / 180.0))
+    else:
+        sharpness_factor = 0.5
+
+    # Combined: 60% size, 40% sharpness
+    quality = 0.6 * size_factor + 0.4 * sharpness_factor
+    return round(quality, 3)
+
+
+def _adaptive_threshold(face_quality: float, base_threshold: float = COSINE_THRESHOLD) -> float:
+    """
+    Tính ngưỡng cosine similarity dựa trên chất lượng khuôn mặt.
+
+    Mặt tốt (quality=1.0) → threshold = base (0.55)
+    Mặt kém (quality=0.0) → threshold = base + penalty (0.65)
+
+    Nghĩa là: mặt ở xa/mờ cần score CAO HƠN mới được match.
+    """
+    penalty = (1.0 - face_quality) * QUALITY_THRESHOLD_PENALTY
+    return base_threshold + penalty
+
+
 def extract_all_embeddings_enhanced(
     frame, detector: str = DETECTOR_BACKEND
-) -> list[tuple[list, dict]]:
+) -> list[tuple[list, dict, float]]:
     """
     Pipeline nhận diện khuôn mặt tối ưu cho KHOẢNG CÁCH XA (3–5m).
 
@@ -169,10 +218,12 @@ def extract_all_embeddings_enhanced(
     - Upscale frame trước detection → detect được mặt nhỏ hơn
     - Enhance từng face crop riêng → embedding chất lượng cao hơn
     - Dùng RetinaFace (không SSD) → tốt nhất cho mặt nhỏ
+    - Tính face quality score → adaptive threshold chống nhầm
 
     Returns:
-        List of (embedding, facial_area) — cùng format với hàm cũ.
+        List of (embedding, facial_area, quality_score).
         facial_area tọa độ TRÊN FRAME GỐC (đã map ngược từ upscale).
+        quality_score: float [0.0 → 1.0] — chất lượng khuôn mặt.
     """
     try:
         if frame is None:
@@ -232,6 +283,13 @@ def extract_all_embeddings_enhanced(
             # Sharpen chi tiết
             face_uint8 = _enhance_face_crop(face_uint8)
 
+            # ── Tính face quality score ──
+            # Kích thước mặt trong frame GỐC (trước upscale)
+            orig_face_size = int(max(
+                facial_area.get("w", 0), facial_area.get("h", 0)
+            ) / scale)
+            face_quality = _compute_face_quality(face_uint8, orig_face_size)
+
             # ── Bước 5: Extract embedding (skip detector — đã aligned) ──
             try:
                 emb_result = DeepFace.represent(
@@ -249,7 +307,12 @@ def extract_all_embeddings_enhanced(
                         "w": int(facial_area.get("w", 0) / scale),
                         "h": int(facial_area.get("h", 0) / scale),
                     }
-                    faces.append((embedding, orig_area))
+                    faces.append((embedding, orig_area, face_quality))
+                    print(
+                        f"    [face] size={orig_face_size}px "
+                        f"quality={face_quality:.2f} "
+                        f"confidence={confidence:.2f}"
+                    )
             except Exception as e:
                 print(f"    [!] Enhanced embed error: {e}")
                 continue
@@ -259,6 +322,10 @@ def extract_all_embeddings_enhanced(
             f" (scale {scale:.1f}x) | {len(detected)} detected → {len(faces)} valid"
         )
         return faces
+
+    except ValueError as ve:
+        print(f"    [!] extract_all_embeddings_enhanced ValueError: {ve}")
+        return []
 
     except Exception as e:
         print(f"    [!] extract_all_embeddings_enhanced ERROR: {e}")
@@ -275,13 +342,8 @@ def find_best_match_pgvector(
     threshold: float = COSINE_THRESHOLD,
 ) -> tuple[Optional[dict], float]:
     """
-    Tìm sinh viên khớp nhất bằng pgvector cosine distance.
-    Toán tử <=> tính cosine distance (1 - cosine_similarity).
-
-    SQL: SELECT ... ORDER BY embedding <=> query LIMIT 1
-
-    Returns:
-        (match_dict, cosine_similarity) hoặc (None, 0.0)
+    Legacy: Tìm sinh viên khớp nhất bằng TOP-1 đơn giản.
+    Dùng cho backward-compatible. Nên dùng find_best_match_pgvector_v2.
     """
     vec_str = "[" + ",".join(str(float(x)) for x in face_embedding) + "]"
 
@@ -312,22 +374,152 @@ def find_best_match_pgvector(
     return None, 0.0
 
 
+def find_best_match_pgvector_v2(
+    db: Session,
+    face_embedding: list,
+    face_quality: float = 1.0,
+    base_threshold: float = COSINE_THRESHOLD,
+) -> tuple[Optional[dict], float, dict]:
+    """
+    So khớp khuôn mặt V2 — chống nhầm người ở khoảng cách xa.
+
+    Cải tiến so với v1:
+    1. TOP-K (20 results) thay vì TOP-1
+    2. Aggregate per-student: trung bình top-3 ảnh/SV → ổn định hơn max
+    3. Margin check: SV #1 phải dẫn trước SV #2 đủ xa (>= 0.04)
+    4. Adaptive threshold: mặt nhỏ/mờ → threshold cao hơn
+
+    Args:
+        face_embedding: Vector 512 chiều
+        face_quality: Điểm chất lượng [0.0 → 1.0]
+        base_threshold: Ngưỡng cơ bản (mặc định 0.55)
+
+    Returns:
+        (match_dict | None, score, debug_info)
+        debug_info chứa thông tin chi tiết để debug/logging.
+    """
+    vec_str = "[" + ",".join(str(float(x)) for x in face_embedding) + "]"
+
+    # Lấy TOP-K kết quả
+    sql = text("""
+        SELECT
+            s.id AS student_id,
+            s.student_code,
+            s.full_name,
+            1 - (sp.face_embedding <=> :query_vec) AS cosine_sim
+        FROM student_photos sp
+        JOIN students s ON s.id = sp.student_id
+        ORDER BY sp.face_embedding <=> :query_vec
+        LIMIT :top_k
+    """)
+
+    rows = db.execute(sql, {"query_vec": vec_str, "top_k": TOP_K_MATCHES}).fetchall()
+    if not rows:
+        return None, 0.0, {"reason": "no_data"}
+
+    # ── Aggregate per student ──
+    students = {}
+    for row in rows:
+        sid = row.student_id
+        if sid not in students:
+            students[sid] = {
+                "student_id": sid,
+                "student_code": row.student_code,
+                "full_name": row.full_name,
+                "scores": [],
+            }
+        students[sid]["scores"].append(float(row.cosine_sim))
+
+    # Tính aggregated score cho mỗi SV: trung bình top-N ảnh
+    for info in students.values():
+        scores = sorted(info["scores"], reverse=True)
+        top_n = scores[:min(STUDENT_AGG_TOP_N, len(scores))]
+        info["agg_score"] = sum(top_n) / len(top_n)
+        info["max_score"] = scores[0]
+        info["n_photos_matched"] = len(scores)
+
+    # Xếp hạng theo agg_score
+    ranked = sorted(students.values(), key=lambda x: x["agg_score"], reverse=True)
+
+    best = ranked[0]
+    second = ranked[1] if len(ranked) >= 2 else None
+
+    # ── Adaptive threshold ──
+    effective_threshold = _adaptive_threshold(face_quality, base_threshold)
+
+    # ── Margin check ──
+    margin = best["agg_score"] - (second["agg_score"] if second else 0.0)
+
+    debug_info = {
+        "face_quality": face_quality,
+        "effective_threshold": round(effective_threshold, 3),
+        "best_student": best["full_name"],
+        "best_agg_score": round(best["agg_score"], 4),
+        "best_max_score": round(best["max_score"], 4),
+        "best_n_photos": best["n_photos_matched"],
+        "second_student": second["full_name"] if second else None,
+        "second_agg_score": round(second["agg_score"], 4) if second else 0,
+        "margin": round(margin, 4),
+        "margin_required": MATCH_MARGIN_MIN,
+    }
+
+    # ── Quyết định ──
+    # Điều kiện 1: Score phải vượt threshold
+    if best["agg_score"] < effective_threshold:
+        debug_info["reason"] = f"below_threshold ({best['agg_score']:.3f} < {effective_threshold:.3f})"
+        print(f"    [match_v2] REJECT — {debug_info['reason']}")
+        return None, 0.0, debug_info
+
+    # Điều kiện 2: Margin phải đủ lớn (nếu có >1 SV)
+    if second and margin < MATCH_MARGIN_MIN:
+        debug_info["reason"] = f"margin_too_small ({margin:.4f} < {MATCH_MARGIN_MIN})"
+        print(
+            f"    [match_v2] REJECT — margin {margin:.4f} < {MATCH_MARGIN_MIN}  "
+            f"| #{1} {best['full_name']}={best['agg_score']:.3f} "
+            f"| #{2} {second['full_name']}={second['agg_score']:.3f}"
+        )
+        return None, 0.0, debug_info
+
+    # ── Match thành công ──
+    debug_info["reason"] = "matched"
+    print(
+        f"    [match_v2] OK — {best['full_name']} agg={best['agg_score']:.3f} "
+        f"(max={best['max_score']:.3f}, {best['n_photos_matched']}photos) "
+        f"margin={margin:.3f} quality={face_quality:.2f} threshold={effective_threshold:.3f}"
+    )
+    return {
+        "student_id": best["student_id"],
+        "student_code": best["student_code"],
+        "full_name": best["full_name"],
+    }, best["agg_score"], debug_info
+
+
 def find_best_match_pgvector_batch(
     db: Session,
     face_embeddings: list[list],
+    face_qualities: list[float] = None,
     threshold: float = COSINE_THRESHOLD,
-) -> list[tuple[Optional[dict], float]]:
+) -> list[tuple[Optional[dict], float, dict]]:
     """
-    So khớp NHIỀU khuôn mặt bằng pgvector — mỗi face 1 query SQL.
-    pgvector sử dụng HNSW/IVFFlat index nên mỗi query rất nhanh (< 1ms).
+    So khớp NHIỀU khuôn mặt bằng pgvector V2 — chống nhầm người.
+
+    Args:
+        face_embeddings: List embedding vectors
+        face_qualities: List quality scores [0-1] cho mỗi face (cùng thứ tự)
+        threshold: Base threshold
 
     Returns:
-        List of (match_dict, score) cho mỗi face.
+        List of (match_dict, score, debug_info) cho mỗi face.
     """
+    if face_qualities is None:
+        face_qualities = [1.0] * len(face_embeddings)
+
     results = []
-    for emb in face_embeddings:
-        match, score = find_best_match_pgvector(db, emb, threshold)
-        results.append((match, score))
+    for emb, quality in zip(face_embeddings, face_qualities):
+        match, score, debug = find_best_match_pgvector_v2(
+            db, emb, face_quality=quality, base_threshold=threshold
+        )
+        results.append((match, score, debug))
     return results
 
 

@@ -22,5 +22,13 @@ FRAME_UPSCALE_TARGET = 1280        # Upscale frame nhỏ để phát hiện mặ
 FACE_CONFIDENCE_MIN = 0.3          # Ngưỡng confidence thấp hơn cho mặt ở xa
 FACE_MIN_PIXELS = 160              # Kích thước tối thiểu face crop (Facenet cần 160x160)
 
+# ─── Anti-misidentification (chống điểm danh nhầm) ───────
+TOP_K_MATCHES = 20                 # Số lượng kết quả trả về từ pgvector để phân tích
+MATCH_MARGIN_MIN = 0.04            # Khoảng cách tối thiểu giữa SV #1 và SV #2 (tránh nhầm)
+STUDENT_AGG_TOP_N = 3              # Lấy trung bình top-N ảnh/SV (aggregation mạnh hơn max)
+QUALITY_FACE_SIZE_GOOD = 120       # Mặt >= 120px → chất lượng tốt (threshold bình thường)
+QUALITY_FACE_SIZE_MIN = 40         # Mặt < 40px → chất lượng rất thấp (threshold cao nhất)
+QUALITY_THRESHOLD_PENALTY = 0.10   # Penalty tối đa thêm vào threshold khi mặt nhỏ/mờ
+
 # Tạo thư mục Images nếu chưa có
 os.makedirs(IMAGES_DIR, exist_ok=True)

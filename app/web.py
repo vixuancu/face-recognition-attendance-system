@@ -33,6 +33,7 @@ from app.face_service import (
     extract_all_embeddings_enhanced,
     find_best_match,
     find_best_match_pgvector_batch,
+    find_best_match_pgvector_v2,
     save_attendance_record,
     create_session,
 )
@@ -237,20 +238,21 @@ def recognize_face():
     if not faces:
         return jsonify({"status": "no_face", "message": "Không phát hiện khuôn mặt"})
 
-    # pgvector batch matching — SQL cosine distance trực tiếp trong DB
-    embeddings_list = [emb for emb, _ in faces]
+    # pgvector V2 batch matching — chống nhầm người
+    embeddings_list = [emb for emb, _, _ in faces]
+    qualities_list = [quality for _, _, quality in faces]
     db = SessionLocal()
     try:
-        matches = find_best_match_pgvector_batch(db, embeddings_list)
+        matches = find_best_match_pgvector_batch(db, embeddings_list, qualities_list)
 
         elapsed = (time.time() - t0) * 1000
-        print(f"[RECOGNIZE] {elapsed:.0f}ms — {len(faces)} face(s) detected (pgvector)")
+        print(f"[RECOGNIZE] {elapsed:.0f}ms — {len(faces)} face(s) detected (pgvector v2)")
 
         # Xây dựng response cho mỗi khuôn mặt
         face_results = []
         new_attended = []
 
-        for i, ((emb, facial_area), (match, score)) in enumerate(zip(faces, matches)):
+        for i, ((emb, facial_area, quality), (match, score, debug)) in enumerate(zip(faces, matches)):
             face_box = {
                 "x": facial_area.get("x", 0),
                 "y": facial_area.get("y", 0),
