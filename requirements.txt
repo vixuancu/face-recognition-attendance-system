@@ -1,0 +1,17 @@
+# Core AI/CV
+deepface==0.0.93
+opencv-python>=4.9.0.80
+tf-keras>=2.16.0
+numpy>=1.24.0,<2.0
+
+# Database
+SQLAlchemy==2.0.36
+psycopg2-binary==2.9.10
+alembic==1.14.1
+pgvector>=0.3.6
+
+# Web
+Flask>=3.0.0
+
+# Utilities
+Pillow>=10.0.0

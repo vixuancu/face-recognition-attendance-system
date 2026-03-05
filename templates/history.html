@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Lịch sử Điểm danh{% endblock %}
+
+{% block extra_css %}
+.session-card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    margin-bottom: 1rem;
+    overflow: hidden;
+}
+.session-header {
+    padding: 1rem 1.5rem;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: background 0.2s;
+}
+.session-header:hover { background: #f7f9fb; }
+.session-header .info h3 { font-size: 1rem; color: #1e3a5f; margin-bottom: 0.2rem; }
+.session-header .info .meta { font-size: 0.85rem; color: #888; }
+.session-body {
+    display: none;
+    padding: 0 1.5rem 1rem;
+    border-top: 1px solid #eee;
+}
+.session-body.open { display: block; }
+.arrow {
+    transition: transform 0.2s;
+    font-size: 1.2rem;
+    color: #999;
+}
+.arrow.open { transform: rotate(90deg); }
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>📅 Lịch sử Điểm danh ({{ sessions|length }} buổi)</h2>
+</div>
+
+{% if sessions %}
+    {% for s in sessions %}
+    <div class="session-card">
+        <div class="session-header" onclick="toggleSession({{ s.id }})">
+            <div class="info">
+                <h3>{{ s.name or 'Buổi học' }}</h3>
+                <div class="meta">{{ s.subject or '' }} — {{ s.date }} — <strong>{{ s.total }} SV</strong></div>
+            </div>
+            <span class="arrow" id="arrow-{{ s.id }}">▶</span>
+        </div>
+        <div class="session-body" id="body-{{ s.id }}">
+            {% if s.records %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Mã SV</th>
+                        <th>Họ tên</th>
+                        <th>Giờ vào</th>
+                        <th>Độ chính xác</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in s.records %}
+                    <tr>
+                        <td>{{ loop.index }}</td>
+                        <td>{{ r.student_code }}</td>
+                        <td>{{ r.full_name }}</td>
+                        <td>{{ r.time }}</td>
+                        <td><span class="badge badge-success">{{ r.confidence }}%</span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p style="color:#999; padding: 1rem 0;">Không có dữ liệu</p>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+{% else %}
+<div class="card" style="text-align:center; padding: 3rem; color: #999;">
+    <div style="font-size: 3rem;">📅</div>
+    <p style="margin-top: 1rem;">Chưa có buổi điểm danh nào</p>
+    <a href="/attendance" class="btn btn-success" style="margin-top: 1rem;">Bắt đầu ngay</a>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function toggleSession(id) {
+    const body = document.getElementById('body-' + id);
+    const arrow = document.getElementById('arrow-' + id);
+    body.classList.toggle('open');
+    arrow.classList.toggle('open');
+}
+</script>
+{% endblock %}

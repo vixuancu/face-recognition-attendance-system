@@ -26,10 +26,12 @@ attendance_filename = "attendance.xlsx"
 initialize_excel(attendance_filename)
 
 # Path to store the images for reference
-reference_images_path = r"C:\Users\admin\Desktop\FaceRecogAttendance\Images"
+reference_images_path = r"C:\D\KHOALUAN\face-recognition-attendance-system\Images"
 # Ensure that the reference images folder exists
 if not os.path.exists(reference_images_path):
-    print(f"Error: The path {reference_images_path} does not exist.")
+    os.makedirs(reference_images_path)
+    print(f"Created Images folder at: {reference_images_path}")
+    print("Please add reference face images to the Images folder and restart.")
     exit()
 
 # Load reference images and names from the specified folder

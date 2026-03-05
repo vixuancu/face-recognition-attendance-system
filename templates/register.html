@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block title %}Đăng ký Sinh viên{% endblock %}
+
+{% block extra_css %}
+.upload-area {
+    border: 3px dashed #c5cdd8;
+    border-radius: 12px;
+    padding: 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+    background: #f9fafc;
+}
+.upload-area:hover, .upload-area.dragover {
+    border-color: #2c5f8a;
+    background: #eef3f9;
+}
+.upload-area .icon { font-size: 3rem; }
+.preview-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 0.75rem;
+    margin-top: 1rem;
+}
+.preview-item {
+    position: relative;
+    border-radius: 8px;
+    overflow: hidden;
+    aspect-ratio: 1;
+    background: #eee;
+}
+.preview-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.preview-item .remove-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: rgba(220,53,69,0.85);
+    color: #fff;
+    border: none;
+    border-radius: 50%;
+    width: 22px;
+    height: 22px;
+    cursor: pointer;
+    font-size: 0.7rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.loading-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 9999;
+    align-items: center;
+    justify-content: center;
+}
+.loading-overlay.show { display: flex; }
+.spinner {
+    width: 50px; height: 50px;
+    border: 5px solid #fff;
+    border-top: 5px solid #2c5f8a;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>📸 Đăng ký Sinh viên mới</h2>
+
+    <form id="registerForm" action="/register" method="POST" enctype="multipart/form-data">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Mã sinh viên *</label>
+                <input type="text" name="student_code" placeholder="VD: 21IT001" required>
+            </div>
+            <div class="form-group">
+                <label>Lớp</label>
+                <input type="text" name="class_name" placeholder="VD: 21CNTT1">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Họ và tên *</label>
+            <input type="text" name="full_name" placeholder="VD: Nguyễn Văn A" required>
+        </div>
+
+        <div class="form-group">
+            <label>Ảnh khuôn mặt (tối đa 5 ảnh) *</label>
+            <div class="upload-area" id="uploadArea" onclick="document.getElementById('photoInput').click()">
+                <div class="icon">📁</div>
+                <p style="margin: 0.5rem 0; font-weight: 600;">Click chọn hoặc kéo thả ảnh vào đây</p>
+                <p style="font-size: 0.85rem; color: #888;">Hỗ trợ: JPG, PNG — Nên chụp rõ mặt, nhiều góc</p>
+            </div>
+            <input type="file" id="photoInput" name="photos" multiple accept="image/*" style="display:none">
+            <div class="preview-grid" id="previewGrid"></div>
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="width: 100%; padding: 0.8rem; font-size: 1rem;">
+            Đăng ký sinh viên
+        </button>
+    </form>
+</div>
+
+<div class="loading-overlay" id="loadingOverlay">
+    <div style="text-align:center; color:#fff;">
+        <div class="spinner" style="margin: 0 auto 1rem;"></div>
+        <p style="font-size: 1.1rem;">Đang xử lý ảnh & trích xuất khuôn mặt...</p>
+        <p style="font-size: 0.85rem; opacity:0.8;">Lần đầu có thể mất 30-60 giây để tải model AI</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const uploadArea = document.getElementById('uploadArea');
+const photoInput = document.getElementById('photoInput');
+const previewGrid = document.getElementById('previewGrid');
+let selectedFiles = [];
+
+// Drag & Drop
+uploadArea.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    uploadArea.classList.add('dragover');
+});
+uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+uploadArea.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadArea.classList.remove('dragover');
+    addFiles(e.dataTransfer.files);
+});
+
+// File input change
+photoInput.addEventListener('change', () => addFiles(photoInput.files));
+
+function addFiles(fileList) {
+    for (const f of fileList) {
+        if (selectedFiles.length >= 5) break;
+        if (!f.type.startsWith('image/')) continue;
+        selectedFiles.push(f);
+    }
+    updatePreview();
+    syncInput();
+}
+
+function removeFile(idx) {
+    selectedFiles.splice(idx, 1);
+    updatePreview();
+    syncInput();
+}
+
+function updatePreview() {
+    previewGrid.innerHTML = '';
+    selectedFiles.forEach((f, idx) => {
+        const div = document.createElement('div');
+        div.className = 'preview-item';
+        const img = document.createElement('img');
+        img.src = URL.createObjectURL(f);
+        const btn = document.createElement('button');
+        btn.className = 'remove-btn';
+        btn.textContent = '✕';
+        btn.type = 'button';
+        btn.onclick = () => removeFile(idx);
+        div.appendChild(img);
+        div.appendChild(btn);
+        previewGrid.appendChild(div);
+    });
+}
+
+function syncInput() {
+    const dt = new DataTransfer();
+    selectedFiles.forEach(f => dt.items.add(f));
+    photoInput.files = dt.files;
+}
+
+// Loading spinner on submit
+document.getElementById('registerForm').addEventListener('submit', () => {
+    document.getElementById('loadingOverlay').classList.add('show');
+});
+</script>
+{% endblock %}

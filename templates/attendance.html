@@ -1,0 +1,416 @@
+{% extends "base.html" %}
+{% block title %}Điểm Danh{% endblock %}
+
+{% block extra_css %}
+.attendance-layout {
+    display: grid;
+    grid-template-columns: 1fr 350px;
+    gap: 1.5rem;
+}
+@media (max-width: 900px) {
+    .attendance-layout { grid-template-columns: 1fr; }
+}
+
+/* Camera */
+.camera-box {
+    position: relative;
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+    aspect-ratio: 4/3;
+}
+.camera-box video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.camera-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(0,0,0,0.7));
+    padding: 1rem;
+    color: #fff;
+}
+.result-banner {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    padding: 0.8rem 2rem;
+    border-radius: 12px;
+    font-size: 1.2rem;
+    font-weight: 700;
+    animation: fadeInOut 2s ease;
+    pointer-events: none;
+    white-space: nowrap;
+}
+.result-banner.success { background: rgba(40, 167, 69, 0.9); color: #fff; }
+.result-banner.already { background: rgba(23, 162, 184, 0.85); color: #fff; }
+.result-banner.unknown { background: rgba(220, 53, 69, 0.85); color: #fff; }
+@keyframes fadeInOut {
+    0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
+    15%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    80%  { opacity: 1; }
+    100% { opacity: 0; }
+}
+
+/* Sidebar */
+.sidebar-card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    overflow: hidden;
+}
+.sidebar-header {
+    background: #1e3a5f;
+    color: #fff;
+    padding: 1rem;
+    text-align: center;
+}
+.sidebar-header .count {
+    font-size: 2rem;
+    font-weight: 700;
+}
+.attended-list {
+    max-height: 400px;
+    overflow-y: auto;
+    padding: 0.5rem;
+}
+.attended-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.6rem 0.8rem;
+    border-bottom: 1px solid #f0f0f0;
+    animation: slideIn 0.3s ease;
+}
+@keyframes slideIn {
+    from { opacity: 0; transform: translateX(-10px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+.attended-item .name { font-weight: 600; }
+.attended-item .meta { font-size: 0.8rem; color: #888; }
+
+/* Setup form */
+.setup-section { margin-bottom: 1.5rem; }
+
+/* Status indicator */
+.status-dot {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    margin-right: 6px;
+}
+.status-dot.active { background: #28a745; animation: pulse 1.5s infinite; }
+.status-dot.inactive { background: #dc3545; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+{% endblock %}
+
+{% block content %}
+<!-- BƯỚC 1: Setup phiên điểm danh -->
+<div class="card" id="setupSection">
+    <h2>🎥 Thiết lập phiên Điểm danh</h2>
+    <div class="form-row">
+        <div class="form-group">
+            <label>Tên buổi học</label>
+            <input type="text" id="sessionName" placeholder="VD: Lập trình Python - Buổi 5">
+        </div>
+        <div class="form-group">
+            <label>Môn học</label>
+            <input type="text" id="subject" placeholder="VD: Lập trình Python">
+        </div>
+    </div>
+    <button class="btn btn-success" style="width:100%; padding:0.8rem;" onclick="startSession()">
+        Bắt đầu Điểm danh
+    </button>
+</div>
+
+<!-- BƯỚC 2: Camera + kết quả (ẩn ban đầu) -->
+<div id="attendanceSection" style="display: none;">
+    <div class="attendance-layout">
+        <!-- Camera -->
+        <div>
+            <div class="card" style="padding: 0; overflow: hidden;">
+                <div class="camera-box" id="cameraBox">
+                    <video id="video" autoplay playsinline muted></video>
+                    <canvas id="canvas" style="display:none;"></canvas>
+                    <!-- Canvas overlay để vẽ bounding box -->
+                    <canvas id="overlayCanvas" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></canvas>
+                    <div class="camera-overlay">
+                        <span class="status-dot active"></span>
+                        <span id="cameraStatus">Đang quét...</span>
+                    </div>
+                    <div id="resultBanner"></div>
+                </div>
+            </div>
+            <div style="margin-top:1rem; text-align:center;">
+                <button class="btn btn-danger" onclick="stopSession()">
+                    Kết thúc điểm danh
+                </button>
+            </div>
+        </div>
+
+        <!-- Sidebar: danh sách đã điểm danh -->
+        <div>
+            <div class="sidebar-card">
+                <div class="sidebar-header">
+                    <div class="count" id="totalCount">0</div>
+                    <div>Sinh viên đã điểm danh</div>
+                </div>
+                <div class="attended-list" id="attendedList">
+                    <div style="text-align:center; padding: 2rem; color: #999;">
+                        Chưa có ai điểm danh
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let video, canvas, ctx, overlayCanvas, overlayCtx;
+let scanning = false;
+let scanInterval = null;
+let faceBoxTimeout = null;
+let isProcessing = false;
+
+// ── SETUP ──
+async function startSession() {
+    const name = document.getElementById('sessionName').value.trim() || 'Buổi học';
+    const subject = document.getElementById('subject').value.trim() || 'N/A';
+
+    const res = await fetch('/api/attendance/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_name: name, subject: subject }),
+    });
+    const data = await res.json();
+    if (data.status !== 'success') {
+        alert(data.message || 'Lỗi tạo phiên');
+        return;
+    }
+
+    document.getElementById('setupSection').style.display = 'none';
+    document.getElementById('attendanceSection').style.display = 'block';
+
+    await startCamera();
+    startScanning();
+}
+
+// ── CAMERA ──
+async function startCamera() {
+    video = document.getElementById('video');
+    canvas = document.getElementById('canvas');
+    ctx = canvas.getContext('2d');
+    overlayCanvas = document.getElementById('overlayCanvas');
+    overlayCtx = overlayCanvas.getContext('2d');
+
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user', width: 640, height: 480 }
+        });
+        video.srcObject = stream;
+
+        video.addEventListener('loadedmetadata', () => {
+            overlayCanvas.width = video.videoWidth;
+            overlayCanvas.height = video.videoHeight;
+        });
+    } catch (err) {
+        alert('Không thể truy cập camera: ' + err.message);
+    }
+}
+
+// ── VẼ NHIỀU BOUNDING BOX ──
+function drawAllFaceBoxes(faceResults) {
+    if (!overlayCtx) return;
+
+    // Resize overlay canvas nếu cần
+    if (overlayCanvas.width !== video.videoWidth) {
+        overlayCanvas.width = video.videoWidth;
+        overlayCanvas.height = video.videoHeight;
+    }
+
+    // Xóa overlay cũ
+    overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+    for (const face of faceResults) {
+        const box = face.face_box;
+        if (!box) continue;
+
+        let color, label;
+        if (face.recognized) {
+            if (face.already_marked) {
+                color = 'rgba(23, 162, 184, 0.9)';   // cyan — đã điểm danh
+                label = `${face.full_name} — Đã ĐD`;
+            } else {
+                color = 'rgba(40, 167, 69, 0.9)';    // xanh lá — mới nhận
+                label = `✓ ${face.full_name} (${face.confidence}%)`;
+            }
+        } else {
+            color = 'rgba(220, 53, 69, 0.85)';       // đỏ — không nhận ra
+            label = 'Không nhận ra';
+        }
+
+        drawSingleBox(box, label, color);
+    }
+
+    // Auto-clear sau 2s
+    if (faceBoxTimeout) clearTimeout(faceBoxTimeout);
+    faceBoxTimeout = setTimeout(() => {
+        if (overlayCtx) overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+    }, 2000);
+}
+
+function drawSingleBox(box, label, color) {
+    const { x, y, w, h } = box;
+
+    // Khung viền khuôn mặt
+    overlayCtx.strokeStyle = color;
+    overlayCtx.lineWidth = 3;
+    overlayCtx.strokeRect(x, y, w, h);
+
+    // Background cho label
+    overlayCtx.font = 'bold 16px Arial';
+    const textWidth = overlayCtx.measureText(label).width;
+    const labelHeight = 26;
+    const labelY = y > labelHeight + 5 ? y - labelHeight - 5 : y + h + 5;
+
+    overlayCtx.fillStyle = color;
+    const rx = x, ry = labelY, rw = textWidth + 14, rh = labelHeight, r = 5;
+    overlayCtx.beginPath();
+    overlayCtx.moveTo(rx + r, ry);
+    overlayCtx.lineTo(rx + rw - r, ry);
+    overlayCtx.quadraticCurveTo(rx + rw, ry, rx + rw, ry + r);
+    overlayCtx.lineTo(rx + rw, ry + rh - r);
+    overlayCtx.quadraticCurveTo(rx + rw, ry + rh, rx + rw - r, ry + rh);
+    overlayCtx.lineTo(rx + r, ry + rh);
+    overlayCtx.quadraticCurveTo(rx, ry + rh, rx, ry + rh - r);
+    overlayCtx.lineTo(rx, ry + r);
+    overlayCtx.quadraticCurveTo(rx, ry, rx + r, ry);
+    overlayCtx.closePath();
+    overlayCtx.fill();
+
+    // Text
+    overlayCtx.fillStyle = '#fff';
+    overlayCtx.fillText(label, x + 7, labelY + 18);
+}
+
+function clearFaceBox() {
+    if (overlayCtx) overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+}
+
+// ── QUÉT LIÊN TỤC ──
+function startScanning() {
+    scanning = true;
+    scanInterval = setInterval(captureAndRecognize, 1000);
+}
+
+async function captureAndRecognize() {
+    if (!scanning || !video || video.readyState < 2 || isProcessing) return;
+    isProcessing = true;
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0);
+
+    canvas.toBlob(async (blob) => {
+        const formData = new FormData();
+        formData.append('image', blob, 'frame.jpg');
+
+        try {
+            const res = await fetch('/api/attendance/recognize', {
+                method: 'POST',
+                body: formData,
+            });
+            const data = await res.json();
+            handleResult(data);
+        } catch (err) {
+            console.error('Scan error:', err);
+        } finally {
+            isProcessing = false;
+        }
+    }, 'image/jpeg', 0.85);
+}
+
+function handleResult(data) {
+    if (data.status === 'no_face') {
+        clearFaceBox();
+        return;
+    }
+    if (data.status !== 'success' || !data.faces) return;
+
+    // Vẽ bounding box cho TẤT CẢ khuôn mặt
+    drawAllFaceBoxes(data.faces);
+
+    // Cập nhật sidebar cho từng face mới điểm danh
+    if (data.new_attended && data.new_attended.length > 0) {
+        for (const person of data.new_attended) {
+            addToList(person);
+            showBanner(`✓ ${person.full_name} (${person.confidence}%)`, 'success');
+        }
+    }
+
+    // Cập nhật số lượng
+    document.getElementById('totalCount').textContent = data.total_attended;
+
+    // Hiển thị banner tổng hợp nếu nhiều face
+    const recognized = data.faces.filter(f => f.recognized);
+    const unknown = data.faces.filter(f => !f.recognized);
+
+    if (recognized.length === 0 && unknown.length > 0) {
+        showBanner(`${unknown.length} khuôn mặt không nhận ra`, 'unknown');
+    }
+}
+
+function showBanner(text, type) {
+    const banner = document.getElementById('resultBanner');
+    banner.className = 'result-banner ' + type;
+    banner.textContent = text;
+    banner.style.animation = 'none';
+    void banner.offsetHeight;
+    banner.style.animation = '';
+}
+
+function addToList(data) {
+    const list = document.getElementById('attendedList');
+    if (list.querySelector('div[style]')) list.innerHTML = '';
+
+    const item = document.createElement('div');
+    item.className = 'attended-item';
+    item.innerHTML = `
+        <div>
+            <div class="name">${data.full_name}</div>
+            <div class="meta">${data.student_code}</div>
+        </div>
+        <div style="text-align:right;">
+            <span class="badge badge-success">${data.confidence}%</span>
+        </div>
+    `;
+    list.insertBefore(item, list.firstChild);
+}
+
+// ── KẾT THÚC ──
+async function stopSession() {
+    scanning = false;
+    if (scanInterval) clearInterval(scanInterval);
+    clearFaceBox();
+
+    if (video && video.srcObject) {
+        video.srcObject.getTracks().forEach(t => t.stop());
+    }
+
+    const res = await fetch('/api/attendance/stop', { method: 'POST' });
+    const data = await res.json();
+
+    document.getElementById('attendanceSection').style.display = 'none';
+    document.getElementById('setupSection').style.display = 'block';
+
+    alert(`Kết thúc! Tổng: ${data.total} sinh viên đã điểm danh.`);
+    location.reload();
+}
+</script>
+{% endblock %}

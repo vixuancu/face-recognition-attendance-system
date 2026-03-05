@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Danh sách Sinh viên{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>📋 Danh sách Sinh viên ({{ students|length }})</h2>
+
+    {% if students %}
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Mã SV</th>
+                    <th>Họ tên</th>
+                    <th>Lớp</th>
+                    <th>Số ảnh</th>
+                    <th>Ngày ĐK</th>
+                    <th>Thao tác</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in students %}
+                <tr id="row-{{ s.id }}">
+                    <td>{{ loop.index }}</td>
+                    <td><strong>{{ s.student_code }}</strong></td>
+                    <td>{{ s.full_name }}</td>
+                    <td>{{ s.class_name }}</td>
+                    <td><span class="badge badge-info">{{ s.num_photos }} ảnh</span></td>
+                    <td>{{ s.created_at }}</td>
+                    <td>
+                        <button class="btn btn-danger btn-sm" onclick="deleteStudent({{ s.id }}, '{{ s.full_name }}')">
+                            Xóa
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div style="text-align: center; padding: 3rem; color: #999;">
+        <div style="font-size: 3rem;">👤</div>
+        <p style="margin-top: 1rem;">Chưa có sinh viên nào</p>
+        <a href="/register" class="btn btn-primary" style="margin-top: 1rem;">Đăng ký ngay</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function deleteStudent(id, name) {
+    if (!confirm(`Xóa sinh viên "${name}"? Hành động không thể hoàn tác.`)) return;
+
+    fetch(`/api/students/${id}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success') {
+                document.getElementById(`row-${id}`).remove();
+            } else {
+                alert(data.message);
+            }
+        })
+        .catch(err => alert('Lỗi: ' + err));
+}
+</script>
+{% endblock %}
