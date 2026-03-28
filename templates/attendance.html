@@ -178,7 +178,7 @@
                         <div style="font-size:2.5rem; margin-bottom:0.5rem;">🧠</div>
                         <div style="font-size:1.1rem; font-weight:600;">Đang khởi động AI...</div>
                         <div style="font-size:0.85rem; color:#ccc; margin-top:0.4rem;">
-                            Load RetinaFace + Facenet512 vào RAM, vui lòng chờ
+                            Load InsightFace buffalo_l (SCRFD + ArcFace) vào RAM, vui lòng chờ
                         </div>
                         <div id="warmupBar" style="
                             margin-top:1rem; width:200px; height:6px;
@@ -457,7 +457,7 @@ async function captureAndRecognize() {
 
     for (let i = 0; i < currentDetections.length; i++) {
         const bb  = currentDetections[i].boundingBox;
-        const pad = 0.35; // 35% padding quanh mặt cho alignment
+        const pad = 0.60; // 60% padding — SCRFD cần context xung quanh mặt để detect + align
 
         const cx = bb.xCenter * vw;
         const cy = bb.yCenter * vh;
@@ -477,7 +477,7 @@ async function captureAndRecognize() {
         cropCanvas.height = h;
         cropCanvas.getContext('2d').drawImage(canvas, x, y, w, h, 0, 0, w, h);
 
-        const blob = await new Promise(r => cropCanvas.toBlob(r, 'image/jpeg', 0.85));
+        const blob = await new Promise(r => cropCanvas.toBlob(r, 'image/jpeg', 0.92));
         formData.append('faces', blob, `face_${i}.jpg`);
         positions.push({ xCenter: bb.xCenter, yCenter: bb.yCenter });
     }

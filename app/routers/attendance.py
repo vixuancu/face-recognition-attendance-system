@@ -1,11 +1,11 @@
 """
-Router: Điểm danh — Redis cache + background DB write.
+Router: Điểm danh — RAM cache + background DB write.
 
 Flow:
-  1. POST /start   → load embeddings SV của lớp lên Redis
-  2. POST /recognize → DeepFace extract → so khớp trên cache (numpy) → trả ngay
-                      → background: ghi DB
-  3. POST /stop    → clear cache
+  1. POST /start         → load embeddings SV của lớp lên RAM cache
+  2. POST /recognize-fast → InsightFace embed crops từ MediaPipe → so khớp RAM cache → trả ngay
+                           → background: ghi DB
+  3. POST /stop          → clear RAM cache
 """
 
 import time
@@ -31,12 +31,8 @@ from app.schemas import (
     FaceResult,
     AttendanceStatusResponse,
 )
-from app.face_service import (
-    extract_all_embeddings_enhanced,
-    extract_all_embeddings_from_frame,
-    extract_embeddings_from_crops,
-)
-from app.redis_client import (
+from app.face_service import extract_embeddings_from_crops
+from app.ram_cache import (
     load_class_embeddings_to_cache,
     get_cached_embeddings,
     mark_attended,
@@ -179,10 +175,21 @@ def _match_from_cache(
     # ── Quyết định ──
     if best["agg_score"] < effective_threshold:
         debug_info["reason"] = "below_threshold"
+        logger.warning(
+            f"[MATCH] ✗ REJECT — best={best['full_name']} "
+            f"agg={best['agg_score']:.4f} < threshold={effective_threshold:.3f} "
+            f"max={best['max_score']:.4f} quality={face_quality:.2f} "
+            f"n_photos={best['n_photos_matched']}"
+        )
         return None, 0.0, debug_info
 
     if second and margin < MATCH_MARGIN_MIN:
         debug_info["reason"] = "margin_too_small"
+        logger.warning(
+            f"[MATCH] ✗ AMBIGUOUS — best={best['full_name']} "
+            f"agg={best['agg_score']:.4f} vs second={second['full_name']} "
+            f"agg={second['agg_score']:.4f} margin={margin:.4f}"
+        )
         return None, 0.0, debug_info
 
     debug_info["reason"] = "matched"
@@ -240,8 +247,8 @@ async def start_attendance(data: AttendanceStartRequest, db: Session = Depends(g
             ],
         })
 
-    # Load lên Redis
-    cached_count = await load_class_embeddings_to_cache(data.course_id, students_data)
+    # Load lên RAM cache
+    cached_count = load_class_embeddings_to_cache(data.course_id, students_data)
 
     # Tạo attendance session trong DB
     session_name = data.session_name or f"{course.course_name} - {course.room}"
@@ -323,17 +330,28 @@ async def recognize_face(
 
     t0 = time.time()
 
-    # ── Extract embeddings từ frame ──
-    faces = extract_all_embeddings_enhanced(frame)
-    if not faces:
+    # ── Extract embeddings từ frame (full pipeline — dùng InsightFace) ──
+    from app.face_service import get_face_app
+    import insightface  # noqa
+    _app = get_face_app()
+    insight_faces = _app.get(frame)
+    if not insight_faces:
         return RecognizeResponse(
             status="no_face",
             total_faces=0,
-            total_attended=len(await get_attended_set(course_id)),
+            total_attended=len(get_attended_set(course_id)),
         )
+    # Convert sang format (embedding, facial_area, quality)
+    from app.face_service import _compute_face_quality, _adaptive_threshold
+    faces = []
+    for f in insight_faces:
+        x1, y1, x2, y2 = f.bbox.astype(int)
+        size = max(x2 - x1, y2 - y1)
+        quality = _compute_face_quality(size)
+        faces.append((f.embedding.tolist(), {"x": x1, "y": y1, "w": x2-x1, "h": y2-y1}, quality))
 
-    # ── Lấy cache từ Redis ──
-    cache_data = await get_cached_embeddings(course_id)
+    # ── Lấy cache từ RAM ──
+    cache_data = get_cached_embeddings(course_id)
     if not cache_data:
         raise HTTPException(status_code=500, detail="Cache trống! Hãy bắt đầu lại phiên điểm danh.")
 
@@ -353,11 +371,11 @@ async def recognize_face(
 
         if match:
             student_id = match["student_id"]
-            already = await is_attended(course_id, student_id)
+            already = is_attended(course_id, student_id)
 
             if not already:
-                # Đánh dấu đã điểm danh trên Redis (ngay lập tức)
-                await mark_attended(course_id, student_id)
+                # Đánh dấu đã điểm danh trên RAM cache (ngay lập tức)
+                mark_attended(course_id, student_id)
 
                 # Background: ghi vào PostgreSQL
                 background_tasks.add_task(
@@ -390,7 +408,7 @@ async def recognize_face(
             ))
 
     elapsed = (time.time() - t0) * 1000
-    attended_set = await get_attended_set(course_id)
+    attended_set = get_attended_set(course_id)
 
     logger.info(f"[RECOGNIZE] {elapsed:.0f}ms — {len(faces)} face(s), {len(new_attended)} new")
 
@@ -453,14 +471,21 @@ async def recognize_fast(
         return RecognizeResponse(
             status="no_face",
             total_faces=0,
-            total_attended=len(await get_attended_set(course_id)),
+            total_attended=len(get_attended_set(course_id)),
         )
 
-    # Extract embeddings từ crops (opencv align + Facenet512)
+    # Extract embeddings từ crops (InsightFace ArcFace)
     embeddings_with_quality = extract_embeddings_from_crops(crops)
 
-    # Lấy cache từ Redis
-    cache_data = await get_cached_embeddings(course_id)
+    # DEBUG: log kết quả extract
+    for idx, (emb, q) in enumerate(embeddings_with_quality):
+        if emb is None:
+            logger.warning(f"[FAST] Crop #{idx}: ✗ InsightFace không detect được mặt")
+        else:
+            logger.info(f"[FAST] Crop #{idx}: ✓ embedding OK, quality={q:.2f}, emb_len={len(emb)}")
+
+    # Lấy cache từ RAM
+    cache_data = get_cached_embeddings(course_id)
     if not cache_data:
         raise HTTPException(status_code=500, detail="Cache trống! Hãy bắt đầu lại phiên.")
 
@@ -483,10 +508,10 @@ async def recognize_fast(
 
         if match:
             student_id = match["student_id"]
-            already = await is_attended(course_id, student_id)
+            already = is_attended(course_id, student_id)
 
             if not already:
-                await mark_attended(course_id, student_id)
+                mark_attended(course_id, student_id)
                 background_tasks.add_task(_bg_save_attendance, session_id, student_id, score)
                 new_attended.append({
                     "full_name": match["full_name"],
@@ -510,7 +535,7 @@ async def recognize_fast(
             face_results.append(FaceResult(recognized=False, face_box=face_box))
 
     elapsed = (time.time() - t0) * 1000
-    attended_set = await get_attended_set(course_id)
+    attended_set = get_attended_set(course_id)
 
     logger.info(f"[FAST] {elapsed:.0f}ms — {len(crops)} crop(s), {len(new_attended)} new")
 
@@ -532,10 +557,10 @@ async def attendance_status(session_id: int):
 
     info = _active_sessions[session_id]
     course_id = info["course_id"]
-    attended_ids = await get_attended_set(course_id)
+    attended_ids = get_attended_set(course_id)
 
     # Lấy metadata từ cache
-    cache_data = await get_cached_embeddings(course_id)
+    cache_data = get_cached_embeddings(course_id)
     attended_list = []
     if cache_data:
         for sid in attended_ids:
@@ -565,10 +590,10 @@ async def stop_attendance(session_id: int = Form(...)):
     course_id = info["course_id"]
 
     # Lấy kết quả trước khi xóa cache
-    attended_ids = await get_attended_set(course_id)
+    attended_ids = get_attended_set(course_id)
 
-    # Clear cache
-    await clear_class_cache(course_id)
+    # Clear RAM cache
+    clear_class_cache(course_id)
 
     logger.info(f"[STOP] Session #{session_id} — {len(attended_ids)} attended")
 
@@ -617,7 +642,7 @@ async def list_active_sessions():
     result = []
     for sid, info in _active_sessions.items():
         course_id = info["course_id"]
-        attended = await get_attended_set(course_id)
+        attended = get_attended_set(course_id)
         result.append({
             "session_id": sid,
             "course_id": course_id,

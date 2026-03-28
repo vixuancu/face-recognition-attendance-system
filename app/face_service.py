@@ -1,364 +1,181 @@
-"""Xử lý nhận diện khuôn mặt: trích xuất embedding + so khớp."""
+"""
+Xử lý nhận diện khuôn mặt — InsightFace buffalo_l (SCRFD + ArcFace, ONNX Runtime).
 
+Pipeline:
+  - Đăng ký SV: đọc file ảnh → detect + embed → lưu DB
+  - Webcam nhận diện: nhận face crops từ MediaPipe → embed → match RAM cache
+
+InsightFace buffalo_l:
+  - SCRFD: face detector (~10ms/frame CPU)
+  - ArcFace: embedding model 512D (~80ms/frame CPU)
+  - Tổng: ~90–150ms, nhanh hơn DeepFace Facenet512+RetinaFace ~3–5x
+"""
+
+import logging
 import os
 import shutil
 from typing import Optional
 
 import cv2
 import numpy as np
-from deepface import DeepFace
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.config import (
-    IMAGES_DIR, FACE_MODEL, DETECTOR_BACKEND, COSINE_THRESHOLD,
-    FRAME_UPSCALE_TARGET, FACE_CONFIDENCE_MIN, FACE_MIN_PIXELS,
+    IMAGES_DIR, INSIGHTFACE_MODEL,
+    COSINE_THRESHOLD, FACE_CONFIDENCE_MIN, FACE_MIN_PIXELS,
     TOP_K_MATCHES, MATCH_MARGIN_MIN, STUDENT_AGG_TOP_N,
     QUALITY_FACE_SIZE_GOOD, QUALITY_FACE_SIZE_MIN, QUALITY_THRESHOLD_PENALTY,
 )
 from app.models import Student, StudentPhoto, AttendanceSession, AttendanceRecord
 
+logger = logging.getLogger("face_service")
 
 # ════════════════════════════════════════════════════════════
-#  TRÍCH XUẤT EMBEDDING
+#  INSIGHTFACE SINGLETON
 # ════════════════════════════════════════════════════════════
 
-def extract_embedding(image_path: str) -> Optional[list]:
-    """
-    Trích xuất face embedding (vector 512 chiều) từ 1 ảnh.
+_face_app = None
 
-    Sử dụng enforce_detection=False để tránh crash khi detector yếu.
-    Kiểm tra confidence >= 0.5 để đảm bảo ảnh hợp lệ.
 
-    Returns:
-        list[float] nếu thành công, None nếu thất bại.
+def get_face_app():
     """
-    try:
-        result = DeepFace.represent(
-            img_path=image_path,
-            model_name=FACE_MODEL,
-            enforce_detection=False,
-            detector_backend=DETECTOR_BACKEND,
+    Lấy InsightFace FaceAnalysis (singleton, load lần đầu ~3-5s).
+    buffalo_l = SCRFD (detection) + ArcFace (recognition, 512D embedding).
+    """
+    global _face_app
+    if _face_app is None:
+        import insightface
+        logger.info(f"[InsightFace] Loading model '{INSIGHTFACE_MODEL}'...")
+        _face_app = insightface.app.FaceAnalysis(
+            name=INSIGHTFACE_MODEL,
+            providers=["CPUExecutionProvider"],
         )
-        if result and len(result) > 0:
-            face = result[0]
-            confidence = face.get("face_confidence", 0)
-            if confidence < 0.5:
-                print(f"    [!] Ảnh {image_path}: confidence quá thấp ({confidence:.2f}) → bỏ qua")
-                return None
-            return face["embedding"]
-        return None
-    except Exception as e:
-        print(f"    [!] Không trích xuất được embedding từ {image_path}: {e}")
-        return None
-
-
-def extract_embedding_from_frame(
-    frame, detector: str = DETECTOR_BACKEND
-) -> tuple[Optional[list], Optional[dict]]:
-    """
-    Trích xuất face embedding từ 1 frame camera (numpy array).
-    Chỉ trả về khuôn mặt ĐẦU TIÊN (backward-compatible).
-
-    Returns:
-        (embedding, facial_area) hoặc (None, None)
-    """
-    faces = extract_all_embeddings_from_frame(frame, detector)
-    if faces:
-        return faces[0]
-    return None, None
-
-
-def extract_all_embeddings_from_frame(
-    frame, detector: str = DETECTOR_BACKEND
-) -> list[tuple[list, dict]]:
-    """
-    Trích xuất face embedding cho TẤT CẢ khuôn mặt trong frame.
-
-    Returns:
-        List of (embedding, facial_area) cho mỗi khuôn mặt hợp lệ.
-        facial_area = {"x": int, "y": int, "w": int, "h": int}
-    """
-    try:
-        if frame is None:
-            return []
-
-        result = DeepFace.represent(
-            img_path=frame,
-            model_name=FACE_MODEL,
-            enforce_detection=False,
-            detector_backend=detector,
-        )
-        if not result:
-            return []
-
-        faces = []
-        for face in result:
-            confidence = face.get("face_confidence", 0)
-            if confidence < 0.5:
-                continue
-            facial_area = face.get("facial_area", None)
-            embedding = face.get("embedding", None)
-            if embedding and facial_area:
-                faces.append((embedding, facial_area))
-
-        return faces
-    except Exception as e:
-        print(f"    [!] extract_all_embeddings_from_frame ERROR: {e}")
-        return []
+        _face_app.prepare(ctx_id=0, det_size=(640, 640))
+        logger.info(f"[InsightFace] ✓ Model '{INSIGHTFACE_MODEL}' loaded (SCRFD + ArcFace)")
+    return _face_app
 
 
 # ════════════════════════════════════════════════════════════
-#  ENHANCED PIPELINE — KHOẢNG CÁCH XA (3–5m)
-#
-#  Vấn đề: camera ở xa → mặt nhỏ (~30-80px) → SSD miss,
-#           embedding chất lượng thấp, ánh sáng không đều.
-#
-#  Pipeline 5 bước:
-#    1. Upscale frame (2x) → mặt nhỏ trở nên lớn hơn
-#    2. CLAHE toàn frame → cân bằng ánh sáng
-#    3. RetinaFace detect → tốt nhất cho mặt nhỏ (tới ~20px)
-#    4. Crop + enhance riêng từng mặt → sharpen chi tiết
-#    5. Embed với detector="skip" → không detect lại
+#  FACE QUALITY SCORING  (dùng cho adaptive threshold)
 # ════════════════════════════════════════════════════════════
 
-def _upscale_frame(frame: np.ndarray, target_max: int = FRAME_UPSCALE_TARGET):
+def _compute_face_quality(original_face_size: int) -> float:
     """
-    Upscale frame nếu nhỏ hơn target — giúp detect khuôn mặt xa.
-    Ví dụ: webcam 640x480 → upscale lên 1280x960 (2x).
+    Tính điểm chất lượng khuôn mặt [0.0 → 1.0] dựa trên kích thước.
+
+    - face >= QUALITY_FACE_SIZE_GOOD (120px) → 1.0
+    - face <= QUALITY_FACE_SIZE_MIN  (40px)  → 0.0
     """
-    h, w = frame.shape[:2]
-    if max(h, w) >= target_max:
-        return frame, 1.0
-    scale = target_max / max(h, w)
-    scale = min(scale, 2.5)  # Giới hạn tối đa 2.5x
-    upscaled = cv2.resize(
-        frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC
-    )
-    return upscaled, scale
-
-
-def _enhance_frame_global(frame: np.ndarray) -> np.ndarray:
-    """
-    CLAHE trên toàn frame — cân bằng contrast/ánh sáng.
-    Hữu ích khi camera xa, ánh sáng phòng không đều.
-    Input: BGR (OpenCV).
-    """
-    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
-    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
-
-
-def _enhance_face_crop(face_img: np.ndarray) -> np.ndarray:
-    """
-    Sharpen chi tiết khuôn mặt — cải thiện embedding cho mặt xa/nhỏ.
-    Dùng unsharp mask — hoạt động bất kể thứ tự kênh màu (BGR/RGB).
-    """
-    gaussian = cv2.GaussianBlur(face_img, (0, 0), sigmaX=2.0)
-    sharpened = cv2.addWeighted(face_img, 1.5, gaussian, -0.5, 0)
-    return sharpened
-
-
-def _compute_face_quality(face_img: np.ndarray, original_face_size: int) -> float:
-    """
-    Tính điểm chất lượng khuôn mặt [0.0 → 1.0].
-
-    Dựa trên 2 yếu tố:
-    - Kích thước mặt trong frame gốc (trước upscale)
-    - Độ sắc nét (Laplacian variance)
-
-    quality thấp → cần threshold cao hơn để tránh nhầm.
-    """
-    # 1. Size factor: face < 40px → 0.0, face >= 120px → 1.0
     if original_face_size >= QUALITY_FACE_SIZE_GOOD:
-        size_factor = 1.0
-    elif original_face_size <= QUALITY_FACE_SIZE_MIN:
-        size_factor = 0.0
-    else:
-        size_factor = (original_face_size - QUALITY_FACE_SIZE_MIN) / (
-            QUALITY_FACE_SIZE_GOOD - QUALITY_FACE_SIZE_MIN
-        )
-
-    # 2. Sharpness factor: Laplacian variance (normalized)
-    if face_img is not None and face_img.size > 0:
-        gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY) if len(face_img.shape) == 3 else face_img
-        lap_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-        # lap_var < 30 → rất mờ, > 200 → rất nét
-        sharpness_factor = min(1.0, max(0.0, (lap_var - 20) / 180.0))
-    else:
-        sharpness_factor = 0.5
-
-    # Combined: 60% size, 40% sharpness
-    quality = 0.6 * size_factor + 0.4 * sharpness_factor
-    return round(quality, 3)
+        return 1.0
+    if original_face_size <= QUALITY_FACE_SIZE_MIN:
+        return 0.0
+    return (original_face_size - QUALITY_FACE_SIZE_MIN) / (
+        QUALITY_FACE_SIZE_GOOD - QUALITY_FACE_SIZE_MIN
+    )
 
 
 def _adaptive_threshold(face_quality: float, base_threshold: float = COSINE_THRESHOLD) -> float:
     """
-    Tính ngưỡng cosine similarity dựa trên chất lượng khuôn mặt.
-
-    Mặt tốt (quality=1.0) → threshold = base (0.55)
-    Mặt kém (quality=0.0) → threshold = base + penalty (0.65)
-
-    Nghĩa là: mặt ở xa/mờ cần score CAO HƠN mới được match.
+    Mặt tốt (quality=1.0) → threshold = base (0.55).
+    Mặt kém (quality=0.0) → threshold = base + penalty.
     """
     penalty = (1.0 - face_quality) * QUALITY_THRESHOLD_PENALTY
     return base_threshold + penalty
 
 
-def extract_all_embeddings_enhanced(
-    frame, detector: str = DETECTOR_BACKEND
-) -> list[tuple[list, dict, float]]:
-    """
-    Pipeline nhận diện khuôn mặt tối ưu cho KHOẢNG CÁCH XA (3–5m).
+# ════════════════════════════════════════════════════════════
+#  TRÍCH XUẤT EMBEDDING — từ file ảnh (dùng khi đăng ký SV)
+# ════════════════════════════════════════════════════════════
 
-    So với extract_all_embeddings_from_frame (chỉ gọi represent 1 lần):
-    - Tách detection và embedding thành 2 bước riêng
-    - Upscale frame trước detection → detect được mặt nhỏ hơn
-    - Enhance từng face crop riêng → embedding chất lượng cao hơn
-    - Dùng RetinaFace (không SSD) → tốt nhất cho mặt nhỏ
-    - Tính face quality score → adaptive threshold chống nhầm
+def extract_embedding(image_path: str) -> Optional[list]:
+    """
+    Trích xuất ArcFace embedding (512D) từ 1 file ảnh.
+    Dùng khi đăng ký sinh viên (không cần realtime).
 
     Returns:
-        List of (embedding, facial_area, quality_score).
-        facial_area tọa độ TRÊN FRAME GỐC (đã map ngược từ upscale).
-        quality_score: float [0.0 → 1.0] — chất lượng khuôn mặt.
+        list[float] 512D nếu thành công, None nếu không phát hiện mặt.
     """
     try:
-        if frame is None:
-            return []
+        img = cv2.imread(image_path)
+        if img is None:
+            logger.warning(f"[extract_embedding] Không đọc được ảnh: {image_path}")
+            return None
 
-        h, w = frame.shape[:2]
+        app = get_face_app()
+        faces = app.get(img)
 
-        # ── Bước 1: Upscale frame ──
-        frame_up, scale = _upscale_frame(frame)
+        if not faces:
+            logger.warning(f"[extract_embedding] Không phát hiện mặt: {image_path}")
+            return None
 
-        # ── Bước 2: CLAHE toàn frame (frame là BGR từ OpenCV) ──
-        frame_enhanced = _enhance_frame_global(frame_up)
-
-        # ── Bước 3: Detect faces bằng RetinaFace ──
-        # extract_faces trả về: face (aligned, RGB float [0,1]), facial_area, confidence
-        detected = DeepFace.extract_faces(
-            img_path=frame_enhanced,
-            detector_backend=detector,
-            enforce_detection=False,
-            align=True,
-        )
-
-        if not detected:
-            return []
-
-        faces = []
-        for face_info in detected:
-            confidence = face_info.get(
-                "confidence", face_info.get("face_confidence", 0)
+        # Lấy mặt có confidence cao nhất
+        best = max(faces, key=lambda f: f.det_score)
+        if best.det_score < FACE_CONFIDENCE_MIN:
+            logger.warning(
+                f"[extract_embedding] Confidence quá thấp "
+                f"({best.det_score:.2f}): {image_path}"
             )
-            if confidence < FACE_CONFIDENCE_MIN:
-                continue
+            return None
 
-            facial_area = face_info.get("facial_area", {})
-            face_img = face_info.get("face", None)
-
-            if face_img is None:
-                continue
-
-            # ── Bước 4: Enhance face crop ──
-            # extract_faces trả về float32 [0,1] → chuyển sang uint8
-            if face_img.dtype != np.uint8:
-                face_uint8 = (face_img * 255).clip(0, 255).astype(np.uint8)
-            else:
-                face_uint8 = face_img.copy()
-
-            # Upscale face nếu quá nhỏ (< 160px)
-            fh, fw = face_uint8.shape[:2]
-            if max(fh, fw) < FACE_MIN_PIXELS:
-                face_scale = FACE_MIN_PIXELS / max(fh, fw)
-                face_uint8 = cv2.resize(
-                    face_uint8, None,
-                    fx=face_scale, fy=face_scale,
-                    interpolation=cv2.INTER_CUBIC,
-                )
-
-            # Sharpen chi tiết
-            face_uint8 = _enhance_face_crop(face_uint8)
-
-            # ── Tính face quality score ──
-            # Kích thước mặt trong frame GỐC (trước upscale)
-            orig_face_size = int(max(
-                facial_area.get("w", 0), facial_area.get("h", 0)
-            ) / scale)
-            face_quality = _compute_face_quality(face_uint8, orig_face_size)
-
-            # ── Bước 5: Extract embedding (skip detector — đã aligned) ──
-            try:
-                emb_result = DeepFace.represent(
-                    img_path=face_uint8,
-                    model_name=FACE_MODEL,
-                    enforce_detection=False,
-                    detector_backend="skip",
-                )
-                if emb_result and len(emb_result) > 0:
-                    embedding = emb_result[0]["embedding"]
-                    # Map tọa độ về frame gốc
-                    orig_area = {
-                        "x": int(facial_area.get("x", 0) / scale),
-                        "y": int(facial_area.get("y", 0) / scale),
-                        "w": int(facial_area.get("w", 0) / scale),
-                        "h": int(facial_area.get("h", 0) / scale),
-                    }
-                    faces.append((embedding, orig_area, face_quality))
-                    print(
-                        f"    [face] size={orig_face_size}px "
-                        f"quality={face_quality:.2f} "
-                        f"confidence={confidence:.2f}"
-                    )
-            except Exception as e:
-                print(f"    [!] Enhanced embed error: {e}")
-                continue
-
-        print(
-            f"    [enhance] {w}x{h} → {frame_up.shape[1]}x{frame_up.shape[0]}"
-            f" (scale {scale:.1f}x) | {len(detected)} detected → {len(faces)} valid"
-        )
-        return faces
-
-    except ValueError as ve:
-        print(f"    [!] extract_all_embeddings_enhanced ValueError: {ve}")
-        return []
+        return best.embedding.tolist()
 
     except Exception as e:
-        print(f"    [!] extract_all_embeddings_enhanced ERROR: {e}")
-        return []
+        logger.error(f"[extract_embedding] ERROR {image_path}: {e}")
+        return None
 
 
 # ════════════════════════════════════════════════════════════
-#  TRÍCH XUẤT EMBEDDING TỪ FACE CROPS (CPU-optimized)
+#  TRÍCH XUẤT EMBEDDING — từ face crops (webcam /recognize-fast)
 #
-#  Dùng khi client (MediaPipe) đã detect + crop mặt sẵn.
-#  Bỏ qua RetinaFace, Upscale, CLAHE — chỉ chạy:
-#    opencv align trên crop nhỏ (~5ms) + Facenet512 embed (~300ms)
-#  → Nhanh hơn enhanced pipeline ~7 lần trên CPU.
+#  Client đã dùng MediaPipe để detect + crop mặt sẵn.
+#  Server KHÔNG chạy lại detector SCRFD (sẽ fail vì crop quá chặt).
+#  Thay vào đó, dùng thẳng ArcFace recognition model:
+#    resize crop → 112×112 → ArcFace inference → embedding 512D.
 # ════════════════════════════════════════════════════════════
+
+_rec_model = None
+
+
+def _get_rec_model():
+    """Lấy ArcFace recognition model (không qua detection)."""
+    global _rec_model
+    if _rec_model is None:
+        app = get_face_app()
+        # app.models là dict: {'recognition': ArcFaceONNX, 'detection': SCRFD, ...}
+        if 'recognition' in app.models:
+            _rec_model = app.models['recognition']
+            logger.info(f"[InsightFace] Got ArcFace rec model: {_rec_model.__class__.__name__}")
+        else:
+            raise RuntimeError(
+                f"Không tìm thấy 'recognition' model! "
+                f"Available: {list(app.models.keys())}"
+            )
+    return _rec_model
+
 
 def extract_embeddings_from_crops(
     face_crops: list[np.ndarray],
 ) -> list[tuple[Optional[list], float]]:
     """
-    Trích xuất embeddings từ face crops đã detect ở client (MediaPipe).
+    Trích xuất ArcFace embeddings từ face crops đã detect ở client (MediaPipe).
 
-    Dùng opencv detector (Haar cascade) cho alignment nhanh (~2-5ms trên crop nhỏ).
-    Không cần upscale/CLAHE/sharpen vì crop đã focus vào mặt.
+    Strategy:
+      1. Thêm padding 50% → app.get() → SCRFD detect + align + ArcFace
+         (tốt nhất, có face alignment chuẩn → cosine ~80-95%)
+      2. Nếu SCRFD vẫn fail → dùng thẳng ArcFace: resize 112×112 → embed
+         (fallback, chất lượng thấp hơn vì không align)
 
     Args:
-        face_crops: List numpy arrays (BGR uint8), mỗi cái là 1 mặt đã crop + padding.
+        face_crops: List numpy arrays (BGR uint8), mỗi cái là 1 mặt đã crop.
 
     Returns:
         List of (embedding, quality_score).
-        embedding = list[float] 512D hoặc None nếu thất bại.
-        quality_score = float [0.0 → 1.0].
     """
+    app = get_face_app()
     results = []
+
     for crop in face_crops:
         if crop is None or crop.size == 0:
             results.append((None, 0.0))
@@ -368,33 +185,63 @@ def extract_embeddings_from_crops(
             h, w = crop.shape[:2]
             face_size = max(h, w)
 
-            # Resize lên tối thiểu 160x160 nếu quá nhỏ (Facenet cần ≥160px)
-            if face_size < FACE_MIN_PIXELS:
-                scale = FACE_MIN_PIXELS / face_size
-                crop = cv2.resize(
-                    crop, None, fx=scale, fy=scale,
-                    interpolation=cv2.INTER_CUBIC,
-                )
-
-            # opencv Haar cascade: rất nhanh trên crop nhỏ (~2-5ms)
-            # Cung cấp face alignment (xoay mắt ngang) → embedding chính xác hơn skip
-            emb_result = DeepFace.represent(
-                img_path=crop,
-                model_name=FACE_MODEL,
-                enforce_detection=False,
-                detector_backend="opencv",
+            # ── Strategy 1: Thêm padding rồi dùng app.get() ──
+            # Padding 50% mỗi bên → SCRFD có đủ context để detect
+            # → alignment chuẩn → embedding tốt nhất
+            pad_ratio = 0.5
+            pad_h = int(h * pad_ratio)
+            pad_w = int(w * pad_ratio)
+            padded = cv2.copyMakeBorder(
+                crop, pad_h, pad_h, pad_w, pad_w,
+                cv2.BORDER_CONSTANT, value=(0, 0, 0)
             )
 
-            if emb_result and len(emb_result) > 0:
-                conf = emb_result[0].get("face_confidence", 0)
-                if conf >= 0.3:  # Ngưỡng thấp hơn vì đã crop sẵn
-                    quality = min(1.0, max(0.2, (face_size - 40) / 120.0))
-                    results.append((emb_result[0]["embedding"], round(quality, 3)))
-                    continue
+            # Đảm bảo padded image đủ lớn cho SCRFD
+            ph, pw = padded.shape[:2]
+            if max(ph, pw) < 128:
+                scale = 128 / max(ph, pw)
+                padded = cv2.resize(padded, None, fx=scale, fy=scale,
+                                    interpolation=cv2.INTER_CUBIC)
 
-            results.append((None, 0.0))
+            faces = app.get(padded)
+
+            if faces:
+                best = max(faces, key=lambda f: f.det_score)
+                quality = round(_compute_face_quality(face_size), 3)
+                logger.debug(
+                    f"[CROP] Strategy 1 OK — det_score={best.det_score:.2f} "
+                    f"quality={quality} size={face_size}px"
+                )
+                results.append((best.embedding.tolist(), quality))
+                continue
+
+            # ── Strategy 2: Dùng thẳng ArcFace (bỏ qua detection) ──
+            logger.info(
+                f"[CROP] Strategy 1 FAIL (SCRFD no detect) — "
+                f"falling back to direct ArcFace, size={face_size}px"
+            )
+            rec_model = _get_rec_model()
+
+            # Resize crop về 112×112
+            aligned = cv2.resize(crop, (112, 112), interpolation=cv2.INTER_CUBIC)
+
+            # ArcFace expects: (1, 3, 112, 112), float32, normalized
+            blob = cv2.dnn.blobFromImage(
+                aligned, 1.0 / 127.5, (112, 112),
+                (127.5, 127.5, 127.5), swapRB=True
+            )
+
+            # Inference
+            embedding = rec_model.session.run(
+                rec_model.output_names,
+                {rec_model.input_names[0]: blob}
+            )[0][0]
+
+            quality = round(_compute_face_quality(face_size), 3) * 0.7  # giảm quality vì không align
+            results.append((embedding.tolist(), quality))
+
         except Exception as e:
-            print(f"    [!] Crop embed error: {e}")
+            logger.error(f"[extract_embeddings_from_crops] Crop error: {e}")
             results.append((None, 0.0))
 
     return results
@@ -402,45 +249,8 @@ def extract_embeddings_from_crops(
 
 # ════════════════════════════════════════════════════════════
 #  SO KHỚP KHUÔN MẶT — PGVECTOR (SQL-level cosine distance)
+#  Dùng khi không có RAM cache (fallback hoặc register flow)
 # ════════════════════════════════════════════════════════════
-
-def find_best_match_pgvector(
-    db: Session,
-    face_embedding: list,
-    threshold: float = COSINE_THRESHOLD,
-) -> tuple[Optional[dict], float]:
-    """
-    Legacy: Tìm sinh viên khớp nhất bằng TOP-1 đơn giản.
-    Dùng cho backward-compatible. Nên dùng find_best_match_pgvector_v2.
-    """
-    vec_str = "[" + ",".join(str(float(x)) for x in face_embedding) + "]"
-
-    sql = text("""
-        SELECT
-            s.id AS student_id,
-            s.student_code,
-            s.full_name,
-            1 - (sp.face_embedding <=> :query_vec) AS cosine_sim
-        FROM student_photos sp
-        JOIN students s ON s.id = sp.student_id
-        ORDER BY sp.face_embedding <=> :query_vec
-        LIMIT 1
-    """)
-
-    row = db.execute(sql, {"query_vec": vec_str}).fetchone()
-    if row is None:
-        return None, 0.0
-
-    score = float(row.cosine_sim)
-    if score >= threshold:
-        return {
-            "student_id": row.student_id,
-            "student_code": row.student_code,
-            "full_name": row.full_name,
-        }, score
-
-    return None, 0.0
-
 
 def find_best_match_pgvector_v2(
     db: Session,
@@ -449,26 +259,19 @@ def find_best_match_pgvector_v2(
     base_threshold: float = COSINE_THRESHOLD,
 ) -> tuple[Optional[dict], float, dict]:
     """
-    So khớp khuôn mặt V2 — chống nhầm người ở khoảng cách xa.
+    So khớp khuôn mặt V2 qua pgvector — chống nhầm người.
 
-    Cải tiến so với v1:
+    Cải tiến:
     1. TOP-K (20 results) thay vì TOP-1
-    2. Aggregate per-student: trung bình top-3 ảnh/SV → ổn định hơn max
-    3. Margin check: SV #1 phải dẫn trước SV #2 đủ xa (>= 0.04)
+    2. Aggregate per-student: trung bình top-3 ảnh/SV
+    3. Margin check: SV #1 phải dẫn trước SV #2 >= 0.04
     4. Adaptive threshold: mặt nhỏ/mờ → threshold cao hơn
-
-    Args:
-        face_embedding: Vector 512 chiều
-        face_quality: Điểm chất lượng [0.0 → 1.0]
-        base_threshold: Ngưỡng cơ bản (mặc định 0.55)
 
     Returns:
         (match_dict | None, score, debug_info)
-        debug_info chứa thông tin chi tiết để debug/logging.
     """
     vec_str = "[" + ",".join(str(float(x)) for x in face_embedding) + "]"
 
-    # Lấy TOP-K kết quả
     sql = text("""
         SELECT
             s.id AS student_id,
@@ -485,20 +288,19 @@ def find_best_match_pgvector_v2(
     if not rows:
         return None, 0.0, {"reason": "no_data"}
 
-    # ── Aggregate per student ──
+    # Aggregate per student
     students = {}
     for row in rows:
         sid = row.student_id
         if sid not in students:
             students[sid] = {
-                "student_id": sid,
+                "student_id":   sid,
                 "student_code": row.student_code,
-                "full_name": row.full_name,
-                "scores": [],
+                "full_name":    row.full_name,
+                "scores":       [],
             }
         students[sid]["scores"].append(float(row.cosine_sim))
 
-    # Tính aggregated score cho mỗi SV: trung bình top-N ảnh
     for info in students.values():
         scores = sorted(info["scores"], reverse=True)
         top_n = scores[:min(STUDENT_AGG_TOP_N, len(scores))]
@@ -506,59 +308,43 @@ def find_best_match_pgvector_v2(
         info["max_score"] = scores[0]
         info["n_photos_matched"] = len(scores)
 
-    # Xếp hạng theo agg_score
     ranked = sorted(students.values(), key=lambda x: x["agg_score"], reverse=True)
-
-    best = ranked[0]
+    best   = ranked[0]
     second = ranked[1] if len(ranked) >= 2 else None
 
-    # ── Adaptive threshold ──
     effective_threshold = _adaptive_threshold(face_quality, base_threshold)
-
-    # ── Margin check ──
     margin = best["agg_score"] - (second["agg_score"] if second else 0.0)
 
     debug_info = {
-        "face_quality": face_quality,
+        "face_quality":       face_quality,
         "effective_threshold": round(effective_threshold, 3),
-        "best_student": best["full_name"],
-        "best_agg_score": round(best["agg_score"], 4),
-        "best_max_score": round(best["max_score"], 4),
-        "best_n_photos": best["n_photos_matched"],
-        "second_student": second["full_name"] if second else None,
-        "second_agg_score": round(second["agg_score"], 4) if second else 0,
-        "margin": round(margin, 4),
-        "margin_required": MATCH_MARGIN_MIN,
+        "best_student":        best["full_name"],
+        "best_agg_score":      round(best["agg_score"], 4),
+        "best_max_score":      round(best["max_score"], 4),
+        "best_n_photos":       best["n_photos_matched"],
+        "second_student":      second["full_name"] if second else None,
+        "second_agg_score":    round(second["agg_score"], 4) if second else 0,
+        "margin":              round(margin, 4),
+        "margin_required":     MATCH_MARGIN_MIN,
     }
 
-    # ── Quyết định ──
-    # Điều kiện 1: Score phải vượt threshold
     if best["agg_score"] < effective_threshold:
         debug_info["reason"] = f"below_threshold ({best['agg_score']:.3f} < {effective_threshold:.3f})"
-        print(f"    [match_v2] REJECT — {debug_info['reason']}")
         return None, 0.0, debug_info
 
-    # Điều kiện 2: Margin phải đủ lớn (nếu có >1 SV)
     if second and margin < MATCH_MARGIN_MIN:
         debug_info["reason"] = f"margin_too_small ({margin:.4f} < {MATCH_MARGIN_MIN})"
-        print(
-            f"    [match_v2] REJECT — margin {margin:.4f} < {MATCH_MARGIN_MIN}  "
-            f"| #{1} {best['full_name']}={best['agg_score']:.3f} "
-            f"| #{2} {second['full_name']}={second['agg_score']:.3f}"
-        )
         return None, 0.0, debug_info
 
-    # ── Match thành công ──
     debug_info["reason"] = "matched"
-    print(
-        f"    [match_v2] OK — {best['full_name']} agg={best['agg_score']:.3f} "
-        f"(max={best['max_score']:.3f}, {best['n_photos_matched']}photos) "
+    logger.info(
+        f"[match_v2] OK — {best['full_name']} agg={best['agg_score']:.3f} "
         f"margin={margin:.3f} quality={face_quality:.2f} threshold={effective_threshold:.3f}"
     )
     return {
-        "student_id": best["student_id"],
+        "student_id":   best["student_id"],
         "student_code": best["student_code"],
-        "full_name": best["full_name"],
+        "full_name":    best["full_name"],
     }, best["agg_score"], debug_info
 
 
@@ -568,17 +354,7 @@ def find_best_match_pgvector_batch(
     face_qualities: list[float] = None,
     threshold: float = COSINE_THRESHOLD,
 ) -> list[tuple[Optional[dict], float, dict]]:
-    """
-    So khớp NHIỀU khuôn mặt bằng pgvector V2 — chống nhầm người.
-
-    Args:
-        face_embeddings: List embedding vectors
-        face_qualities: List quality scores [0-1] cho mỗi face (cùng thứ tự)
-        threshold: Base threshold
-
-    Returns:
-        List of (match_dict, score, debug_info) cho mỗi face.
-    """
+    """So khớp nhiều khuôn mặt qua pgvector V2."""
     if face_qualities is None:
         face_qualities = [1.0] * len(face_embeddings)
 
@@ -588,81 +364,6 @@ def find_best_match_pgvector_batch(
             db, emb, face_quality=quality, base_threshold=threshold
         )
         results.append((match, score, debug))
-    return results
-
-
-# ════════════════════════════════════════════════════════════
-#  LEGACY — Các hàm cũ (giữ lại cho CLI / backward-compatible)
-# ════════════════════════════════════════════════════════════
-
-def cosine_similarity(vec_a: list, vec_b: list) -> float:
-    """Tính cosine similarity giữa 2 vector."""
-    a = np.array(vec_a)
-    b = np.array(vec_b)
-    dot = np.dot(a, b)
-    norm = np.linalg.norm(a) * np.linalg.norm(b)
-    if norm == 0:
-        return 0.0
-    return float(dot / norm)
-
-
-def find_best_match(
-    face_embedding: list,
-    all_embeddings: list[dict],
-    threshold: float = COSINE_THRESHOLD,
-) -> tuple[Optional[dict], float]:
-    """Legacy: so khớp bằng Python loop (dùng cho CLI)."""
-    best_match = None
-    best_score = -1.0
-
-    for record in all_embeddings:
-        score = cosine_similarity(face_embedding, record["embedding"])
-        if score > best_score:
-            best_score = score
-            best_match = record
-
-    if best_score >= threshold:
-        return best_match, best_score
-    return None, 0.0
-
-
-def precompute_embedding_matrix(all_embeddings: list[dict]) -> np.ndarray:
-    """Legacy: chuyển embeddings thành numpy matrix (cho CLI)."""
-    if not all_embeddings:
-        return np.array([], dtype=np.float32)
-
-    matrix = np.array([e["embedding"] for e in all_embeddings], dtype=np.float32)
-    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    return matrix / norms
-
-
-def find_best_match_fast_batch(
-    face_embeddings: list[list],
-    embedding_matrix: np.ndarray,
-    all_embeddings: list[dict],
-    threshold: float = COSINE_THRESHOLD,
-) -> list[tuple[Optional[dict], float]]:
-    """Legacy: numpy batch matching (cho CLI)."""
-    if embedding_matrix.size == 0 or not face_embeddings:
-        return [(None, 0.0)] * len(face_embeddings)
-
-    query_matrix = np.array(face_embeddings, dtype=np.float32)
-    norms = np.linalg.norm(query_matrix, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    query_matrix = query_matrix / norms
-
-    sim_matrix = query_matrix @ embedding_matrix.T
-
-    results = []
-    for i in range(sim_matrix.shape[0]):
-        best_idx = int(np.argmax(sim_matrix[i]))
-        best_score = float(sim_matrix[i][best_idx])
-        if best_score >= threshold:
-            results.append((all_embeddings[best_idx], best_score))
-        else:
-            results.append((None, 0.0))
-
     return results
 
 
@@ -681,51 +382,41 @@ def register_student(
     Đăng ký 1 sinh viên:
       1. Tạo record trong bảng students
       2. Copy ảnh vào Images/{student_code}/
-      3. Trích xuất embedding → lưu vào student_photos
-
-    Args:
-        photo_paths: Danh sách đường dẫn tuyệt đối đến ảnh gốc.
+      3. Trích xuất ArcFace embedding → lưu vào student_photos
     """
-    # Kiểm tra trùng mã SV
     exists = db.query(Student).filter(Student.student_code == student_code).first()
     if exists:
         print(f"[!] Mã SV '{student_code}' đã tồn tại trong DB.")
         return None
 
-    # 1. Tạo student
     student = Student(
         student_code=student_code,
         full_name=full_name,
         class_name=class_name,
     )
     db.add(student)
-    db.flush()  # Lấy student.id nhưng chưa commit
+    db.flush()
 
-    # 2. Tạo thư mục Images/{student_code}/
     student_dir = os.path.join(IMAGES_DIR, student_code)
     os.makedirs(student_dir, exist_ok=True)
 
-    # 3. Xử lý từng ảnh
     success = 0
     for idx, src_path in enumerate(photo_paths, start=1):
         if not os.path.isfile(src_path):
             print(f"    [!] File không tồn tại: {src_path}")
             continue
 
-        # Copy ảnh vào thư mục sinh viên
-        ext = os.path.splitext(src_path)[1]  # .jpg / .png
+        ext = os.path.splitext(src_path)[1]
         dest_filename = f"{student_code}_{idx}{ext}"
         dest_path = os.path.join(student_dir, dest_filename)
         shutil.copy2(src_path, dest_path)
 
-        # Trích xuất embedding
         embedding = extract_embedding(dest_path)
         if embedding is None:
             print(f"    [!] Ảnh {idx}: Không phát hiện khuôn mặt → bỏ qua")
             os.remove(dest_path)
             continue
 
-        # Lưu DB
         relative_path = os.path.relpath(dest_path, os.path.dirname(IMAGES_DIR))
         photo = StudentPhoto(
             student_id=student.id,
@@ -751,13 +442,7 @@ def register_student(
 # ════════════════════════════════════════════════════════════
 
 def load_all_embeddings(db: Session) -> list[dict]:
-    """
-    Load tất cả face embedding từ DB lên RAM.
-
-    Returns:
-        [{"student_id": 1, "student_code": "21IT001",
-          "full_name": "Nguyễn Văn A", "embedding": [0.12, ...]}, ...]
-    """
+    """Load tất cả face embedding từ DB lên RAM."""
     rows = (
         db.query(
             Student.id,
@@ -771,14 +456,12 @@ def load_all_embeddings(db: Session) -> list[dict]:
 
     data = []
     for student_id, code, name, emb in rows:
-        data.append(
-            {
-                "student_id": student_id,
-                "student_code": code,
-                "full_name": name,
-                "embedding": emb,
-            }
-        )
+        data.append({
+            "student_id":   student_id,
+            "student_code": code,
+            "full_name":    name,
+            "embedding":    emb,
+        })
     print(f"[i] Đã load {len(data)} embeddings từ DB")
     return data
 
@@ -793,10 +476,7 @@ def save_attendance_record(
     student_id: int,
     confidence: float,
 ) -> bool:
-    """
-    Ghi 1 record điểm danh. Trả về True nếu mới, False nếu đã điểm danh trước đó.
-    """
-    # Kiểm tra đã điểm danh chưa
+    """Ghi 1 record điểm danh. Trả về True nếu mới, False nếu đã điểm danh."""
     exists = (
         db.query(AttendanceRecord)
         .filter_by(session_id=session_id, student_id=student_id)

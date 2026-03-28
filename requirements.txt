@@ -1,7 +1,7 @@
 # Core AI/CV
-deepface==0.0.93
+insightface>=0.7.3
+onnxruntime>=1.18.0
 opencv-python>=4.9.0.80
-tf-keras>=2.16.0
 numpy>=1.24.0,<2.0
 
 # Database
@@ -15,9 +15,6 @@ fastapi>=0.115.0
 uvicorn[standard]>=0.34.0
 python-multipart>=0.0.9
 jinja2>=3.1.0
-
-# Cache
-redis>=5.0.0
 
 # Utilities
 Pillow>=10.0.0
