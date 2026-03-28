@@ -9,7 +9,11 @@ import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
 from app.database import engine, Base
-from app.models import Student, StudentPhoto, AttendanceSession, AttendanceRecord  # noqa: F401
+from app.models import (  # noqa: F401
+    Student, StudentPhoto,
+    Course, CourseSchedule, CourseEnrollment,
+    AttendanceSession, AttendanceRecord,
+)
 
 
 DB_NAME = "attendance_db"
@@ -62,10 +66,13 @@ def create_tables():
 
 
 if __name__ == "__main__":
-    print("=" * 45)
-    print("  KHỞI TẠO DATABASE")
-    print("=" * 45)
+    print("=" * 50)
+    print("  KHỞI TẠO DATABASE — v2.0 (FastAPI + Redis)")
+    print("=" * 50)
     create_database_if_not_exists()
     create_pgvector_extension()
     create_tables()
-    print("\n[✓] Hoàn tất! Bạn có thể chạy: python -m app.web")
+    print("\n[✓] Hoàn tất! Chạy server:")
+    print("    uvicorn app.main:app --reload --port 8000")
+    print("    Mở: http://localhost:8000")
+    print("    API docs: http://localhost:8000/docs")

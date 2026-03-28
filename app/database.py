@@ -10,10 +10,10 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 Base = declarative_base()
 
 
-def get_session():
-    """Mở 1 DB session (nhớ đóng sau khi dùng)."""
-    session = SessionLocal()
+def get_db():
+    """FastAPI dependency — mở 1 DB session, tự đóng sau request."""
+    db = SessionLocal()
     try:
-        yield session
+        yield db
     finally:
-        session.close()
+        db.close()

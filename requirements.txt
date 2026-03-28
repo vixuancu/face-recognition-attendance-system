@@ -10,8 +10,14 @@ psycopg2-binary==2.9.10
 alembic==1.14.1
 pgvector>=0.3.6
 
-# Web
-Flask>=3.0.0
+# Web — FastAPI
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+python-multipart>=0.0.9
+jinja2>=3.1.0
+
+# Cache
+redis>=5.0.0
 
 # Utilities
 Pillow>=10.0.0

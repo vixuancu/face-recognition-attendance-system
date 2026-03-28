@@ -1,0 +1,303 @@
+{% extends "base.html" %}
+{% block title %}Lớp tín chỉ{% endblock %}
+
+{% block extra_css %}
+.course-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+.course-card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    padding: 1.25rem;
+    transition: transform 0.2s, box-shadow 0.2s;
+    border-left: 4px solid #2c5f8a;
+}
+.course-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+}
+.course-card h3 { color: #1e3a5f; margin-bottom: 0.5rem; }
+.course-meta { font-size: 0.85rem; color: #666; margin-bottom: 0.25rem; }
+.course-actions { margin-top: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+.modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+}
+.modal-overlay.active { display: flex; }
+.modal-box {
+    background: #fff;
+    border-radius: 12px;
+    padding: 2rem;
+    width: 90%;
+    max-width: 500px;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+.modal-box h2 { margin-bottom: 1rem; }
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>📚 Quản lý Lớp tín chỉ</h2>
+    <button class="btn btn-primary" onclick="showCreateModal()">+ Tạo lớp mới</button>
+</div>
+
+{% if courses %}
+<div class="course-grid">
+    {% for c in courses %}
+    <div class="course-card" id="course-{{ c.id }}">
+        <h3>{{ c.course_code }}</h3>
+        <div style="font-size: 1.05rem; font-weight: 500; margin-bottom: 0.5rem;">{{ c.course_name }}</div>
+        <div class="course-meta">🏫 Phòng: {{ c.room or 'Chưa xếp' }}</div>
+        <div class="course-meta">📆 Học kỳ: {{ c.semester or 'N/A' }}</div>
+        <div class="course-meta">👥 <strong>{{ c.num_students }} sinh viên</strong></div>
+        <div class="course-actions">
+            <button class="btn btn-sm btn-success" onclick="showEnrollModal({{ c.id }}, '{{ c.course_name }}')">
+                + Thêm SV
+            </button>
+            <button class="btn btn-sm btn-outline" onclick="viewStudents({{ c.id }})">
+                Xem DS
+            </button>
+            <button class="btn btn-sm btn-danger" onclick="deleteCourse({{ c.id }})">
+                Xóa
+            </button>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card" style="text-align: center; padding: 3rem; color: #888;">
+    <div style="font-size: 3rem; margin-bottom: 1rem;">📚</div>
+    <p>Chưa có lớp tín chỉ nào. Hãy tạo lớp mới!</p>
+</div>
+{% endif %}
+
+<!-- Modal: Tạo lớp -->
+<div class="modal-overlay" id="createModal">
+    <div class="modal-box">
+        <h2>Tạo lớp tín chỉ mới</h2>
+        <div class="form-group">
+            <label>Mã lớp *</label>
+            <input type="text" id="newCourseCode" placeholder="VD: INT1340">
+        </div>
+        <div class="form-group">
+            <label>Tên môn *</label>
+            <input type="text" id="newCourseName" placeholder="VD: Lập trình Python">
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Phòng</label>
+                <input type="text" id="newRoom" placeholder="VD: A305">
+            </div>
+            <div class="form-group">
+                <label>Học kỳ</label>
+                <input type="text" id="newSemester" placeholder="VD: 2025-2026-2">
+            </div>
+        </div>
+        <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
+            <button class="btn btn-success" onclick="createCourse()">Tạo lớp</button>
+            <button class="btn btn-outline" onclick="closeModal('createModal')">Hủy</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Thêm SV -->
+<div class="modal-overlay" id="enrollModal">
+    <div class="modal-box">
+        <h2>Thêm sinh viên vào lớp</h2>
+        <p style="color: #666; margin-bottom: 0.5rem;" id="enrollCourseName">—</p>
+        <div class="form-group">
+            <input type="text" id="enrollSearch" placeholder="🔍 Tìm theo mã SV hoặc họ tên..." oninput="filterEnrollList()">
+        </div>
+        <div id="enrollStudentList" style="max-height: 300px; overflow-y: auto; border: 1px solid #e0e0e0; border-radius: 8px; padding: 0.5rem;">
+            <p style="color: #888; text-align: center;">Đang tải...</p>
+        </div>
+        <div style="display: flex; gap: 0.5rem; margin-top: 1rem; align-items: center;">
+            <button class="btn btn-success" onclick="enrollStudents()">Thêm đã chọn</button>
+            <button class="btn btn-outline" onclick="closeModal('enrollModal')">Hủy</button>
+            <span id="enrollSelectedCount" style="margin-left: auto; font-size: 0.85rem; color: #666;">Đã chọn: 0</span>
+        </div>
+        <div id="enrollResult" style="margin-top: 1rem;"></div>
+    </div>
+</div>
+
+<!-- Modal: Xem DS SV -->
+<div class="modal-overlay" id="studentsModal">
+    <div class="modal-box">
+        <h2>Danh sách sinh viên</h2>
+        <div id="studentsList"></div>
+        <button class="btn btn-outline" style="margin-top: 1rem;" onclick="closeModal('studentsModal')">Đóng</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let currentEnrollCourseId = null;
+let allStudentsCache = [];
+
+function showCreateModal() {
+    document.getElementById('createModal').classList.add('active');
+}
+
+async function showEnrollModal(courseId, courseName) {
+    currentEnrollCourseId = courseId;
+    document.getElementById('enrollCourseName').textContent = courseName;
+    document.getElementById('enrollSearch').value = '';
+    document.getElementById('enrollResult').innerHTML = '';
+    document.getElementById('enrollSelectedCount').textContent = 'Đã chọn: 0';
+    document.getElementById('enrollStudentList').innerHTML = '<p style="color: #888; text-align: center;">Đang tải...</p>';
+    document.getElementById('enrollModal').classList.add('active');
+
+    // Fetch tất cả SV và SV đã trong lớp
+    const [allRes, enrolledRes] = await Promise.all([
+        fetch('/api/students'),
+        fetch(`/api/courses/${courseId}/students`),
+    ]);
+    const allStudents = await allRes.json();
+    const enrolledStudents = await enrolledRes.json();
+    const enrolledIds = new Set(enrolledStudents.map(s => s.id));
+
+    // Lọc ra SV chưa đăng ký lớp này
+    allStudentsCache = allStudents.filter(s => !enrolledIds.has(s.id));
+
+    renderEnrollList(allStudentsCache);
+}
+
+function renderEnrollList(students) {
+    const list = document.getElementById('enrollStudentList');
+    if (students.length === 0) {
+        list.innerHTML = '<p style="color: #888; text-align: center; padding: 1rem;">Không có sinh viên nào để thêm.</p>';
+        return;
+    }
+    list.innerHTML = students.map(s => `
+        <label style="display: flex; align-items: center; padding: 0.4rem 0.5rem; border-bottom: 1px solid #f0f0f0; cursor: pointer; gap: 0.5rem;"
+               onmouseover="this.style.background='#f5f8ff'" onmouseout="this.style.background=''">
+            <input type="checkbox" class="enroll-cb" value="${s.id}" onchange="updateEnrollCount()">
+            <strong style="min-width: 80px;">${s.student_code}</strong>
+            <span>${s.full_name}</span>
+            <span style="margin-left: auto; font-size: 0.8rem; color: #999;">${s.class_name || ''}</span>
+        </label>
+    `).join('');
+}
+
+function filterEnrollList() {
+    const q = document.getElementById('enrollSearch').value.trim().toLowerCase();
+    if (!q) {
+        renderEnrollList(allStudentsCache);
+        return;
+    }
+    const filtered = allStudentsCache.filter(s =>
+        s.student_code.toLowerCase().includes(q) || s.full_name.toLowerCase().includes(q)
+    );
+    renderEnrollList(filtered);
+}
+
+function updateEnrollCount() {
+    const checked = document.querySelectorAll('.enroll-cb:checked').length;
+    document.getElementById('enrollSelectedCount').textContent = `Đã chọn: ${checked}`;
+}
+
+function closeModal(id) {
+    document.getElementById(id).classList.remove('active');
+}
+
+async function createCourse() {
+    const code = document.getElementById('newCourseCode').value.trim();
+    const name = document.getElementById('newCourseName').value.trim();
+    const room = document.getElementById('newRoom').value.trim();
+    const semester = document.getElementById('newSemester').value.trim();
+
+    if (!code || !name) {
+        alert('Mã lớp và Tên môn là bắt buộc!');
+        return;
+    }
+
+    const res = await fetch('/api/courses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ course_code: code, course_name: name, room: room || null, semester: semester || null }),
+    });
+
+    if (res.ok) {
+        alert('Tạo lớp thành công!');
+        location.reload();
+    } else {
+        const err = await res.json();
+        alert(err.detail || 'Lỗi!');
+    }
+}
+
+async function enrollStudents() {
+    const checked = document.querySelectorAll('.enroll-cb:checked');
+    if (checked.length === 0) {
+        alert('Chưa chọn sinh viên nào!');
+        return;
+    }
+
+    const ids = Array.from(checked).map(cb => parseInt(cb.value));
+
+    const res = await fetch(`/api/courses/${currentEnrollCourseId}/enrollments/bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ student_ids: ids }),
+    });
+    const data = await res.json();
+
+    document.getElementById('enrollResult').innerHTML =
+        `<div class="flash success">${data.message}</div>`;
+
+    setTimeout(() => location.reload(), 1500);
+}
+
+async function viewStudents(courseId) {
+    const res = await fetch(`/api/courses/${courseId}/students`);
+    const students = await res.json();
+
+    const list = document.getElementById('studentsList');
+    if (students.length === 0) {
+        list.innerHTML = '<p style="color: #888;">Chưa có sinh viên nào trong lớp này.</p>';
+    } else {
+        list.innerHTML = `<table>
+            <tr><th>Mã SV</th><th>Họ tên</th><th>Số ảnh</th></tr>
+            ${students.map(s => `<tr>
+                <td>${s.student_code}</td>
+                <td>${s.full_name}</td>
+                <td>${s.num_photos}</td>
+            </tr>`).join('')}
+        </table>`;
+    }
+
+    document.getElementById('studentsModal').classList.add('active');
+}
+
+async function deleteCourse(courseId) {
+    if (!confirm('Xóa lớp này? Dữ liệu enrollment sẽ bị mất!')) return;
+
+    const res = await fetch(`/api/courses/${courseId}`, { method: 'DELETE' });
+    if (res.ok) {
+        document.getElementById(`course-${courseId}`).remove();
+    } else {
+        const err = await res.json();
+        alert(err.detail || 'Lỗi!');
+    }
+}
+
+// Close modal on overlay click
+document.querySelectorAll('.modal-overlay').forEach(m => {
+    m.addEventListener('click', (e) => {
+        if (e.target === m) m.classList.remove('active');
+    });
+});
+</script>
+{% endblock %}

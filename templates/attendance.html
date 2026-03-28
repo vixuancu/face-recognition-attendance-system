@@ -106,37 +106,91 @@
 .status-dot.active { background: #28a745; animation: pulse 1.5s infinite; }
 .status-dot.inactive { background: #dc3545; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* Course select styling */
+.course-select-card {
+    background: linear-gradient(135deg, #e8f4fd, #f0f7ff);
+    border: 2px solid #2c5f8a;
+}
 {% endblock %}
 
 {% block content %}
 <!-- BƯỚC 1: Setup phiên điểm danh -->
-<div class="card" id="setupSection">
+<div class="card course-select-card" id="setupSection">
     <h2>🎥 Thiết lập phiên Điểm danh</h2>
+
+    <!-- Chọn lớp tín chỉ -->
+    <div class="form-group" style="margin-bottom: 1.5rem;">
+        <label style="font-size: 1rem; color: #1e3a5f;">Chọn lớp tín chỉ *</label>
+        <select id="courseSelect" style="font-size: 1rem; padding: 0.8rem;">
+            <option value="">-- Chọn lớp --</option>
+            {% for c in courses %}
+            <option value="{{ c.id }}" data-name="{{ c.course_name }}" data-room="{{ c.room }}">
+                {{ c.course_code }} — {{ c.course_name }} ({{ c.room }}) — {{ c.num_students }} SV
+            </option>
+            {% endfor %}
+        </select>
+        {% if not courses %}
+        <p style="color: #dc3545; margin-top: 0.5rem; font-size: 0.9rem;">
+            ⚠️ Chưa có lớp tín chỉ nào. <a href="/courses">Tạo lớp mới</a> trước.
+        </p>
+        {% endif %}
+    </div>
+
     <div class="form-row">
         <div class="form-group">
-            <label>Tên buổi học</label>
+            <label>Tên buổi học (tuỳ chọn)</label>
             <input type="text" id="sessionName" placeholder="VD: Lập trình Python - Buổi 5">
         </div>
         <div class="form-group">
-            <label>Môn học</label>
-            <input type="text" id="subject" placeholder="VD: Lập trình Python">
+            <label>Ghi chú (tuỳ chọn)</label>
+            <input type="text" id="subject" placeholder="VD: Kiểm tra giữa kỳ">
         </div>
     </div>
-    <button class="btn btn-success" style="width:100%; padding:0.8rem;" onclick="startSession()">
-        Bắt đầu Điểm danh
+    <button class="btn btn-success" style="width:100%; padding:0.8rem; font-size:1.05rem;" onclick="startSession()">
+        🚀 Bắt đầu Điểm danh
     </button>
 </div>
 
 <!-- BƯỚC 2: Camera + kết quả (ẩn ban đầu) -->
 <div id="attendanceSection" style="display: none;">
+    <!-- Info bar -->
+    <div class="card" style="padding: 0.8rem 1.5rem; background: #e8f4fd; display:flex; justify-content:space-between; align-items:center;">
+        <div>
+            <strong id="sessionInfo">—</strong>
+            <span style="margin-left:1rem; color:#666;" id="cacheInfo"></span>
+        </div>
+        <span class="badge badge-info" id="elapsedBadge">—</span>
+    </div>
+
     <div class="attendance-layout">
         <!-- Camera -->
         <div>
             <div class="card" style="padding: 0; overflow: hidden;">
                 <div class="camera-box" id="cameraBox">
+        <!-- Warmup overlay (ẩn sau khi AI sẵn sàng) -->
+                    <div id="warmupOverlay" style="
+                        position:absolute; top:0; left:0; right:0; bottom:0;
+                        background: rgba(0,0,0,0.65);
+                        display:flex; flex-direction:column;
+                        align-items:center; justify-content:center;
+                        color:#fff; z-index:10; border-radius:12px;">
+                        <div style="font-size:2.5rem; margin-bottom:0.5rem;">🧠</div>
+                        <div style="font-size:1.1rem; font-weight:600;">Đang khởi động AI...</div>
+                        <div style="font-size:0.85rem; color:#ccc; margin-top:0.4rem;">
+                            Load RetinaFace + Facenet512 vào RAM, vui lòng chờ
+                        </div>
+                        <div id="warmupBar" style="
+                            margin-top:1rem; width:200px; height:6px;
+                            background:rgba(255,255,255,0.2); border-radius:3px; overflow:hidden;">
+                            <div id="warmupBarFill" style="
+                                height:100%; width:0%; background:#28a745;
+                                border-radius:3px; transition: width 0.3s;">
+                            </div>
+                        </div>
+                    </div>
                     <video id="video" autoplay playsinline muted></video>
                     <canvas id="canvas" style="display:none;"></canvas>
-                    <!-- Canvas overlay để vẽ bounding box -->
                     <canvas id="overlayCanvas" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></canvas>
                     <div class="camera-overlay">
                         <span class="status-dot active"></span>
@@ -147,7 +201,7 @@
             </div>
             <div style="margin-top:1rem; text-align:center;">
                 <button class="btn btn-danger" onclick="stopSession()">
-                    Kết thúc điểm danh
+                    ⏹ Kết thúc điểm danh
                 </button>
             </div>
         </div>
@@ -171,201 +225,339 @@
 {% endblock %}
 
 {% block extra_js %}
+<!-- MediaPipe Face Detection (chạy hoàn toàn trong browser) -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.4/face_detection.js" crossorigin="anonymous"></script>
 <script>
 let video, canvas, ctx, overlayCanvas, overlayCtx;
 let scanning = false;
 let scanInterval = null;
-let faceBoxTimeout = null;
 let isProcessing = false;
+let currentSessionId = null;
+let warmupDone = false;
+let warmupTimer = null;
 
-// ── SETUP ──
+// ── MediaPipe state ──
+let mpFaceDetection = null;
+let mpCamera = null;
+let currentDetections = [];   // detections mới nhất từ MediaPipe (30fps)
+
+// ── Label cache: faceKey → {name, code, confidence, status, expiry} ──
+let faceLabels = new Map();
+const LABEL_TTL_MS = 5000;    // giữ label 5 giây kể từ lần nhận diện cuối
+
+// ════════════════════════════════════════════════════════════
+//  HELPER: tạo key nhận dạng vị trí mặt
+//  Dùng tọa độ tâm (normalized 0-1), làm tròn để chịu jitter
+// ════════════════════════════════════════════════════════════
+function makeFaceKey(xCenter, yCenter) {
+    return `${Math.round(xCenter * 16)}_${Math.round(yCenter * 16)}`;
+}
+
+// ════════════════════════════════════════════════════════════
+//  BƯỚC 1: BẮT ĐẦU PHIÊN
+// ════════════════════════════════════════════════════════════
 async function startSession() {
-    const name = document.getElementById('sessionName').value.trim() || 'Buổi học';
-    const subject = document.getElementById('subject').value.trim() || 'N/A';
+    const courseSelect = document.getElementById('courseSelect');
+    const courseId = courseSelect.value;
+    if (!courseId) { alert('Vui lòng chọn lớp tín chỉ!'); return; }
+
+    const sessionName = document.getElementById('sessionName').value.trim() || '';
+    const subject     = document.getElementById('subject').value.trim() || '';
 
     const res = await fetch('/api/attendance/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_name: name, subject: subject }),
+        body: JSON.stringify({
+            course_id:    parseInt(courseId),
+            session_name: sessionName || null,
+            subject:      subject || null,
+        }),
     });
     const data = await res.json();
-    if (data.status !== 'success') {
-        alert(data.message || 'Lỗi tạo phiên');
-        return;
-    }
+    if (data.status !== 'success') { alert(data.detail || data.message || 'Lỗi tạo phiên!'); return; }
 
-    document.getElementById('setupSection').style.display = 'none';
+    currentSessionId = data.session_id;
+    document.getElementById('sessionInfo').textContent  = `📚 ${data.session_name}`;
+    document.getElementById('cacheInfo').textContent    = `Cache: ${data.cached_embeddings} embeddings / ${data.total_students} SV`;
+    document.getElementById('setupSection').style.display    = 'none';
     document.getElementById('attendanceSection').style.display = 'block';
 
-    await startCamera();
-    startScanning();
+    await initCameraAndMediaPipe();
+    startWarmupProgress();
+    // Gửi nhận diện lên server mỗi 1500ms (không phải 300ms)
+    scanInterval = setInterval(captureAndRecognize, 1500);
 }
 
-// ── CAMERA ──
-async function startCamera() {
-    video = document.getElementById('video');
-    canvas = document.getElementById('canvas');
-    ctx = canvas.getContext('2d');
-    overlayCanvas = document.getElementById('overlayCanvas');
-    overlayCtx = overlayCanvas.getContext('2d');
+// ════════════════════════════════════════════════════════════
+//  WARMUP PROGRESS BAR
+// ════════════════════════════════════════════════════════════
+function startWarmupProgress() {
+    let pct = 0;
+    const fill = document.getElementById('warmupBarFill');
+    warmupTimer = setInterval(() => {
+        pct = Math.min(pct + 1.2, 95);
+        if (fill) fill.style.width = pct + '%';
+    }, 100);
+}
 
+function hideWarmupOverlay() {
+    if (warmupDone) return;
+    warmupDone = true;
+    if (warmupTimer) clearInterval(warmupTimer);
+    const overlay = document.getElementById('warmupOverlay');
+    const fill    = document.getElementById('warmupBarFill');
+    if (fill) fill.style.width = '100%';
+    setTimeout(() => { if (overlay) overlay.style.display = 'none'; }, 400);
+}
+
+// ════════════════════════════════════════════════════════════
+//  KHỞI TẠO CAMERA + MEDIAPIPE
+// ════════════════════════════════════════════════════════════
+async function initCameraAndMediaPipe() {
+    video         = document.getElementById('video');
+    canvas        = document.getElementById('canvas');
+    ctx           = canvas.getContext('2d');
+    overlayCanvas = document.getElementById('overlayCanvas');
+    overlayCtx    = overlayCanvas.getContext('2d');
+
+    // 1. Xin quyền camera
     try {
         const stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: 'user', width: 640, height: 480 }
         });
         video.srcObject = stream;
-
-        video.addEventListener('loadedmetadata', () => {
-            overlayCanvas.width = video.videoWidth;
-            overlayCanvas.height = video.videoHeight;
-        });
+        await new Promise(resolve => video.addEventListener('loadedmetadata', resolve, { once: true }));
+        overlayCanvas.width  = video.videoWidth;
+        overlayCanvas.height = video.videoHeight;
     } catch (err) {
         alert('Không thể truy cập camera: ' + err.message);
+        return;
     }
+
+    // 2. Khởi tạo MediaPipe FaceDetection
+    mpFaceDetection = new FaceDetection({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.4/${file}`,
+    });
+    mpFaceDetection.setOptions({
+        model: 'short',              // 'short' ~2m, nhanh; 'full' xa hơn nhưng chậm hơn
+        minDetectionConfidence: 0.5,
+    });
+    mpFaceDetection.onResults(onMediaPipeResults);
+
+    // 3. MediaPipe Camera util — tự động feed frame 30fps
+    mpCamera = new Camera(video, {
+        onFrame: async () => {
+            if (!scanning) return;
+            await mpFaceDetection.send({ image: video });
+        },
+        width: 640,
+        height: 480,
+    });
+    await mpCamera.start();
+    scanning = true;
 }
 
-// ── VẼ NHIỀU BOUNDING BOX ──
-function drawAllFaceBoxes(faceResults) {
+// ════════════════════════════════════════════════════════════
+//  MEDIAPIPE CALLBACK — chạy ~30fps, vẽ box mượt
+// ════════════════════════════════════════════════════════════
+function onMediaPipeResults(results) {
     if (!overlayCtx) return;
 
-    // Resize overlay canvas nếu cần
-    if (overlayCanvas.width !== video.videoWidth) {
-        overlayCanvas.width = video.videoWidth;
-        overlayCanvas.height = video.videoHeight;
+    const vw = overlayCanvas.width;
+    const vh = overlayCanvas.height;
+    overlayCtx.clearRect(0, 0, vw, vh);
+
+    currentDetections = results.detections || [];
+    const now = Date.now();
+
+    // Dọn label hết hạn
+    for (const [key] of faceLabels) {
+        if (faceLabels.get(key).expiry < now) faceLabels.delete(key);
     }
 
-    // Xóa overlay cũ
-    overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+    for (const det of currentDetections) {
+        const bb  = det.boundingBox;
+        // MediaPipe trả normalized coords, convert sang pixel
+        const x = (bb.xCenter - bb.width  / 2) * vw;
+        const y = (bb.yCenter - bb.height / 2) * vh;
+        const w = bb.width  * vw;
+        const h = bb.height * vh;
 
-    for (const face of faceResults) {
-        const box = face.face_box;
-        if (!box) continue;
+        const key   = makeFaceKey(bb.xCenter, bb.yCenter);
+        const label = faceLabels.get(key);
 
-        let color, label;
-        if (face.recognized) {
-            if (face.already_marked) {
-                color = 'rgba(23, 162, 184, 0.9)';   // cyan — đã điểm danh
-                label = `${face.full_name} — Đã ĐD`;
-            } else {
-                color = 'rgba(40, 167, 69, 0.9)';    // xanh lá — mới nhận
-                label = `✓ ${face.full_name} (${face.confidence}%)`;
-            }
+        if (label) {
+            // Mặt đã nhận diện — hiện tên
+            const color = label.status === 'already'
+                ? 'rgba(23, 162, 184, 0.92)'
+                : 'rgba(40, 167, 69, 0.92)';
+            const text  = label.status === 'already'
+                ? `${label.name} ✓`
+                : `✓ ${label.name} (${label.confidence}%)`;
+            drawBox(x, y, w, h, text, color);
         } else {
-            color = 'rgba(220, 53, 69, 0.85)';       // đỏ — không nhận ra
-            label = 'Không nhận ra';
+            // Chưa nhận diện — hiện "..."
+            drawBox(x, y, w, h, '...', 'rgba(255, 193, 7, 0.88)');
         }
-
-        drawSingleBox(box, label, color);
     }
-
-    // Auto-clear sau 2s
-    if (faceBoxTimeout) clearTimeout(faceBoxTimeout);
-    faceBoxTimeout = setTimeout(() => {
-        if (overlayCtx) overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-    }, 2000);
 }
 
-function drawSingleBox(box, label, color) {
-    const { x, y, w, h } = box;
-
-    // Khung viền khuôn mặt
+// ── Vẽ 1 bounding box + label ──
+function drawBox(x, y, w, h, label, color) {
+    // Viền box
     overlayCtx.strokeStyle = color;
-    overlayCtx.lineWidth = 3;
+    overlayCtx.lineWidth   = 2.5;
     overlayCtx.strokeRect(x, y, w, h);
 
-    // Background cho label
-    overlayCtx.font = 'bold 16px Arial';
-    const textWidth = overlayCtx.measureText(label).width;
-    const labelHeight = 26;
-    const labelY = y > labelHeight + 5 ? y - labelHeight - 5 : y + h + 5;
+    // Label background + text
+    overlayCtx.font = 'bold 14px Arial';
+    const tw = overlayCtx.measureText(label).width;
+    const lh = 24, r = 4;
+    const lx = x;
+    const ly = y > lh + 4 ? y - lh - 4 : y + h + 4;
 
     overlayCtx.fillStyle = color;
-    const rx = x, ry = labelY, rw = textWidth + 14, rh = labelHeight, r = 5;
     overlayCtx.beginPath();
-    overlayCtx.moveTo(rx + r, ry);
-    overlayCtx.lineTo(rx + rw - r, ry);
-    overlayCtx.quadraticCurveTo(rx + rw, ry, rx + rw, ry + r);
-    overlayCtx.lineTo(rx + rw, ry + rh - r);
-    overlayCtx.quadraticCurveTo(rx + rw, ry + rh, rx + rw - r, ry + rh);
-    overlayCtx.lineTo(rx + r, ry + rh);
-    overlayCtx.quadraticCurveTo(rx, ry + rh, rx, ry + rh - r);
-    overlayCtx.lineTo(rx, ry + r);
-    overlayCtx.quadraticCurveTo(rx, ry, rx + r, ry);
+    overlayCtx.moveTo(lx + r,      ly);
+    overlayCtx.lineTo(lx + tw + 12 - r, ly);
+    overlayCtx.quadraticCurveTo(lx + tw + 12, ly,      lx + tw + 12, ly + r);
+    overlayCtx.lineTo(lx + tw + 12, ly + lh - r);
+    overlayCtx.quadraticCurveTo(lx + tw + 12, ly + lh, lx + tw + 12 - r, ly + lh);
+    overlayCtx.lineTo(lx + r,      ly + lh);
+    overlayCtx.quadraticCurveTo(lx, ly + lh, lx, ly + lh - r);
+    overlayCtx.lineTo(lx, ly + r);
+    overlayCtx.quadraticCurveTo(lx, ly, lx + r, ly);
     overlayCtx.closePath();
     overlayCtx.fill();
 
-    // Text
     overlayCtx.fillStyle = '#fff';
-    overlayCtx.fillText(label, x + 7, labelY + 18);
+    overlayCtx.fillText(label, lx + 6, ly + 16);
 }
 
-function clearFaceBox() {
-    if (overlayCtx) overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-}
-
-// ── QUÉT LIÊN TỤC ──
-function startScanning() {
-    scanning = true;
-    scanInterval = setInterval(captureAndRecognize, 1000);
-}
-
+// ════════════════════════════════════════════════════════════
+//  GỬI FACE CROPS LÊN SERVER — mỗi 1500ms
+//  MediaPipe detect → crop từng mặt → gửi crops (~5KB/mặt)
+//  thay vì full frame (~50KB) + RetinaFace trên server
+// ════════════════════════════════════════════════════════════
 async function captureAndRecognize() {
     if (!scanning || !video || video.readyState < 2 || isProcessing) return;
+    if (currentDetections.length === 0) return; // Không có mặt → skip
     isProcessing = true;
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    canvas.width  = vw;
+    canvas.height = vh;
     ctx.drawImage(video, 0, 0);
 
-    canvas.toBlob(async (blob) => {
-        const formData = new FormData();
-        formData.append('image', blob, 'frame.jpg');
+    const formData  = new FormData();
+    formData.append('session_id', currentSessionId);
+    const positions = [];
 
-        try {
-            const res = await fetch('/api/attendance/recognize', {
-                method: 'POST',
-                body: formData,
-            });
-            const data = await res.json();
-            handleResult(data);
-        } catch (err) {
-            console.error('Scan error:', err);
-        } finally {
-            isProcessing = false;
-        }
-    }, 'image/jpeg', 0.85);
+    for (let i = 0; i < currentDetections.length; i++) {
+        const bb  = currentDetections[i].boundingBox;
+        const pad = 0.35; // 35% padding quanh mặt cho alignment
+
+        const cx = bb.xCenter * vw;
+        const cy = bb.yCenter * vh;
+        const fw = bb.width  * vw * (1 + pad);
+        const fh = bb.height * vh * (1 + pad);
+
+        const x = Math.max(0, Math.round(cx - fw / 2));
+        const y = Math.max(0, Math.round(cy - fh / 2));
+        const w = Math.min(Math.round(fw), vw - x);
+        const h = Math.min(Math.round(fh), vh - y);
+
+        if (w < 40 || h < 40) continue; // Bỏ qua mặt quá nhỏ
+
+        // Crop mặt từ canvas
+        const cropCanvas = document.createElement('canvas');
+        cropCanvas.width  = w;
+        cropCanvas.height = h;
+        cropCanvas.getContext('2d').drawImage(canvas, x, y, w, h, 0, 0, w, h);
+
+        const blob = await new Promise(r => cropCanvas.toBlob(r, 'image/jpeg', 0.85));
+        formData.append('faces', blob, `face_${i}.jpg`);
+        positions.push({ xCenter: bb.xCenter, yCenter: bb.yCenter });
+    }
+
+    if (positions.length === 0) { isProcessing = false; return; }
+    formData.append('face_positions', JSON.stringify(positions));
+
+    try {
+        const res  = await fetch('/api/attendance/recognize-fast', { method: 'POST', body: formData });
+        const data = await res.json();
+        handleResult(data, positions);
+    } catch (err) {
+        console.error('Scan error:', err);
+    } finally {
+        isProcessing = false;
+    }
 }
 
-function handleResult(data) {
-    if (data.status === 'no_face') {
-        clearFaceBox();
+// ════════════════════════════════════════════════════════════
+//  XỬ LÝ KẾT QUẢ TỪ SERVER
+//  → gắn label vào đúng MediaPipe detection bằng index (cùng thứ tự)
+// ════════════════════════════════════════════════════════════
+function handleResult(data, positions) {
+    hideWarmupOverlay();
+
+    if (!data || data.status === 'no_face') {
+        document.getElementById('cameraStatus').textContent = 'Đang quét...';
         return;
     }
     if (data.status !== 'success' || !data.faces) return;
 
-    // Vẽ bounding box cho TẤT CẢ khuôn mặt
-    drawAllFaceBoxes(data.faces);
+    if (data.elapsed_ms) {
+        document.getElementById('elapsedBadge').textContent = `${data.elapsed_ms}ms`;
+    }
 
-    // Cập nhật sidebar cho từng face mới điểm danh
-    if (data.new_attended && data.new_attended.length > 0) {
+    const now = Date.now();
+
+    // Gắn label cho từng face (index-based — cùng thứ tự với crops đã gửi)
+    for (let i = 0; i < data.faces.length; i++) {
+        const face = data.faces[i];
+        const pos  = (positions && positions[i]) || {};
+        const key  = makeFaceKey(pos.xCenter || 0, pos.yCenter || 0);
+
+        if (face.recognized) {
+            faceLabels.set(key, {
+                name:       face.full_name,
+                code:       face.student_code,
+                confidence: face.confidence,
+                status:     face.already_marked ? 'already' : 'new',
+                expiry:     now + LABEL_TTL_MS,
+            });
+        }
+    }
+
+    // Cập nhật sidebar & banner
+    if (data.new_attended?.length > 0) {
         for (const person of data.new_attended) {
             addToList(person);
             showBanner(`✓ ${person.full_name} (${person.confidence}%)`, 'success');
         }
     }
-
-    // Cập nhật số lượng
     document.getElementById('totalCount').textContent = data.total_attended;
 
-    // Hiển thị banner tổng hợp nếu nhiều face
-    const recognized = data.faces.filter(f => f.recognized);
+    const recog   = data.faces.filter(f => f.recognized);
     const unknown = data.faces.filter(f => !f.recognized);
-
-    if (recognized.length === 0 && unknown.length > 0) {
+    if (recog.length > 0) {
+        const allDone = recog.every(f => f.already_marked);
+        document.getElementById('cameraStatus').textContent =
+            allDone ? `${recog.length} SV đã điểm danh trước` : `Nhận diện ${recog.length} SV`;
+    } else if (unknown.length > 0) {
+        document.getElementById('cameraStatus').textContent = `${unknown.length} khuôn mặt chưa nhận ra`;
         showBanner(`${unknown.length} khuôn mặt không nhận ra`, 'unknown');
+    } else {
+        document.getElementById('cameraStatus').textContent = 'Đang quét...';
     }
 }
 
+// ════════════════════════════════════════════════════════════
+//  BANNER + LIST
+// ════════════════════════════════════════════════════════════
 function showBanner(text, type) {
     const banner = document.getElementById('resultBanner');
     banner.className = 'result-banner ' + type;
@@ -378,7 +570,6 @@ function showBanner(text, type) {
 function addToList(data) {
     const list = document.getElementById('attendedList');
     if (list.querySelector('div[style]')) list.innerHTML = '';
-
     const item = document.createElement('div');
     item.className = 'attended-item';
     item.innerHTML = `
@@ -388,28 +579,33 @@ function addToList(data) {
         </div>
         <div style="text-align:right;">
             <span class="badge badge-success">${data.confidence}%</span>
-        </div>
-    `;
+        </div>`;
     list.insertBefore(item, list.firstChild);
 }
 
-// ── KẾT THÚC ──
+// ════════════════════════════════════════════════════════════
+//  KẾT THÚC PHIÊN
+// ════════════════════════════════════════════════════════════
 async function stopSession() {
     scanning = false;
-    if (scanInterval) clearInterval(scanInterval);
-    clearFaceBox();
+    if (scanInterval)      clearInterval(scanInterval);
+    if (warmupTimer)       clearInterval(warmupTimer);
+    if (mpCamera)          mpCamera.stop();
+    if (mpFaceDetection)   mpFaceDetection.close();
+    if (overlayCtx)        overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+    faceLabels.clear();
+    currentDetections = [];
 
-    if (video && video.srcObject) {
-        video.srcObject.getTracks().forEach(t => t.stop());
-    }
+    if (video?.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
 
-    const res = await fetch('/api/attendance/stop', { method: 'POST' });
+    const formData = new FormData();
+    formData.append('session_id', currentSessionId);
+    const res  = await fetch('/api/attendance/stop', { method: 'POST', body: formData });
     const data = await res.json();
 
     document.getElementById('attendanceSection').style.display = 'none';
-    document.getElementById('setupSection').style.display = 'block';
-
-    alert(`Kết thúc! Tổng: ${data.total} sinh viên đã điểm danh.`);
+    document.getElementById('setupSection').style.display      = 'block';
+    alert(`Kết thúc! Tổng: ${data.total_attended} sinh viên đã điểm danh.`);
     location.reload();
 }
 </script>

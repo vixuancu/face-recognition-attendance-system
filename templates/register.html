@@ -21,6 +21,8 @@
     grid-template-columns: repeat(5, 1fr);
     gap: 0.75rem;
     margin-top: 1rem;
+    max-height: 320px;
+    overflow-y: auto;
 }
 .preview-item {
     position: relative;
@@ -73,30 +75,31 @@
 {% block content %}
 <div class="card">
     <h2>📸 Đăng ký Sinh viên mới</h2>
+    <div id="flashMessage"></div>
 
-    <form id="registerForm" action="/register" method="POST" enctype="multipart/form-data">
+    <form id="registerForm" enctype="multipart/form-data">
         <div class="form-row">
             <div class="form-group">
                 <label>Mã sinh viên *</label>
-                <input type="text" name="student_code" placeholder="VD: 21IT001" required>
+                <input type="text" name="student_code" id="studentCode" placeholder="VD: 21IT001" required>
             </div>
             <div class="form-group">
                 <label>Lớp</label>
-                <input type="text" name="class_name" placeholder="VD: 21CNTT1">
+                <input type="text" name="class_name" id="className" placeholder="VD: 21CNTT1">
             </div>
         </div>
 
         <div class="form-group">
             <label>Họ và tên *</label>
-            <input type="text" name="full_name" placeholder="VD: Nguyễn Văn A" required>
+            <input type="text" name="full_name" id="fullName" placeholder="VD: Nguyễn Văn A" required>
         </div>
 
         <div class="form-group">
-            <label>Ảnh khuôn mặt (tối đa 5 ảnh) *</label>
+            <label>Ảnh khuôn mặt (10 ảnh, nhiều góc) *</label>
             <div class="upload-area" id="uploadArea" onclick="document.getElementById('photoInput').click()">
                 <div class="icon">📁</div>
                 <p style="margin: 0.5rem 0; font-weight: 600;">Click chọn hoặc kéo thả ảnh vào đây</p>
-                <p style="font-size: 0.85rem; color: #888;">Hỗ trợ: JPG, PNG — Nên chụp rõ mặt, nhiều góc</p>
+                <p style="font-size: 0.85rem; color: #888;">Hỗ trợ: JPG, PNG — Nên chụp rõ mặt, nhiều góc khác nhau (tối thiểu 10 ảnh)</p>
             </div>
             <input type="file" id="photoInput" name="photos" multiple accept="image/*" style="display:none">
             <div class="preview-grid" id="previewGrid"></div>
@@ -141,7 +144,7 @@ photoInput.addEventListener('change', () => addFiles(photoInput.files));
 
 function addFiles(fileList) {
     for (const f of fileList) {
-        if (selectedFiles.length >= 5) break;
+        if (selectedFiles.length >= 10) break;
         if (!f.type.startsWith('image/')) continue;
         selectedFiles.push(f);
     }
@@ -179,9 +182,53 @@ function syncInput() {
     photoInput.files = dt.files;
 }
 
-// Loading spinner on submit
-document.getElementById('registerForm').addEventListener('submit', () => {
+function showFlash(message, type) {
+    const el = document.getElementById('flashMessage');
+    el.innerHTML = `<div class="flash ${type}">${message}</div>`;
+    setTimeout(() => el.innerHTML = '', 5000);
+}
+
+// Submit via AJAX to FastAPI
+document.getElementById('registerForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    if (selectedFiles.length < 10) {
+        showFlash(`Cần ít nhất 10 ảnh để đăng ký (bạn mới chọn ${selectedFiles.length} ảnh).`, 'error');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('student_code', document.getElementById('studentCode').value.trim());
+    formData.append('full_name', document.getElementById('fullName').value.trim());
+    formData.append('class_name', document.getElementById('className').value.trim());
+
+    for (const f of selectedFiles) {
+        formData.append('photos', f);
+    }
+
     document.getElementById('loadingOverlay').classList.add('show');
+
+    try {
+        const res = await fetch('/api/students/register', {
+            method: 'POST',
+            body: formData,
+        });
+        const data = await res.json();
+
+        document.getElementById('loadingOverlay').classList.remove('show');
+
+        if (res.ok && data.status === 'success') {
+            showFlash(data.message, 'success');
+            document.getElementById('registerForm').reset();
+            selectedFiles = [];
+            updatePreview();
+        } else {
+            showFlash(data.detail || data.message || 'Đăng ký thất bại!', 'error');
+        }
+    } catch (err) {
+        document.getElementById('loadingOverlay').classList.remove('show');
+        showFlash('Lỗi kết nối server: ' + err.message, 'error');
+    }
 });
 </script>
 {% endblock %}

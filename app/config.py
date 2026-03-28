@@ -7,20 +7,24 @@ DATABASE_URL = os.getenv(
     "postgresql+psycopg2://root:123456@localhost:5432/attendance_db",
 )
 
+# ─── Redis ─────────────────────────────────────────────────
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+REDIS_CACHE_TTL = int(os.getenv("REDIS_CACHE_TTL", "7200"))  # 2 giờ
+
 # ─── Đường dẫn lưu ảnh gốc ───────────────────────────────
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IMAGES_DIR = os.path.join(BASE_DIR, "Images")
 
 # ─── DeepFace config ──────────────────────────────────────
 FACE_MODEL = "Facenet512"          # Vector 512 chiều, chính xác cao
-DETECTOR_BACKEND = "retinaface"    # Chính xác nhất (dùng khi đăng ký & real-time)
-DETECTOR_BACKEND_FAST = "ssd"      # Legacy: chỉ dùng cho CLI nếu cần nhanh
+DETECTOR_BACKEND = "retinaface"    # Chính xác nhất (dùng khi đăng ký SV)
+DETECTOR_BACKEND_FAST = "opencv"   # Dùng cho real-time crops (Haar ~2ms trên crop nhỏ)
 COSINE_THRESHOLD = 0.55            # Ngưỡng cosine similarity (thấp hơn = chặt hơn)
 
-# ─── Long-distance recognition (3–5m) ─────────────────────
-FRAME_UPSCALE_TARGET = 1280        # Upscale frame nhỏ để phát hiện mặt xa tốt hơn
-FACE_CONFIDENCE_MIN = 0.3          # Ngưỡng confidence thấp hơn cho mặt ở xa
-FACE_MIN_PIXELS = 160              # Kích thước tối thiểu face crop (Facenet cần 160x160)
+# ─── Distance recognition (≤ 2.5m, tối ưu CPU) ───────────
+FRAME_UPSCALE_TARGET = 640         # Giảm từ 960 — 2.5m không cần upscale mạnh
+FACE_CONFIDENCE_MIN = 0.5          # Ngưỡng confidence (MediaPipe đã lọc trước)
+FACE_MIN_PIXELS = 100              # Giảm từ 160 — mặt ở 2.5m đủ lớn
 
 # ─── Anti-misidentification (chống điểm danh nhầm) ───────
 TOP_K_MATCHES = 20                 # Số lượng kết quả trả về từ pgvector để phân tích

@@ -333,6 +333,74 @@ def extract_all_embeddings_enhanced(
 
 
 # ════════════════════════════════════════════════════════════
+#  TRÍCH XUẤT EMBEDDING TỪ FACE CROPS (CPU-optimized)
+#
+#  Dùng khi client (MediaPipe) đã detect + crop mặt sẵn.
+#  Bỏ qua RetinaFace, Upscale, CLAHE — chỉ chạy:
+#    opencv align trên crop nhỏ (~5ms) + Facenet512 embed (~300ms)
+#  → Nhanh hơn enhanced pipeline ~7 lần trên CPU.
+# ════════════════════════════════════════════════════════════
+
+def extract_embeddings_from_crops(
+    face_crops: list[np.ndarray],
+) -> list[tuple[Optional[list], float]]:
+    """
+    Trích xuất embeddings từ face crops đã detect ở client (MediaPipe).
+
+    Dùng opencv detector (Haar cascade) cho alignment nhanh (~2-5ms trên crop nhỏ).
+    Không cần upscale/CLAHE/sharpen vì crop đã focus vào mặt.
+
+    Args:
+        face_crops: List numpy arrays (BGR uint8), mỗi cái là 1 mặt đã crop + padding.
+
+    Returns:
+        List of (embedding, quality_score).
+        embedding = list[float] 512D hoặc None nếu thất bại.
+        quality_score = float [0.0 → 1.0].
+    """
+    results = []
+    for crop in face_crops:
+        if crop is None or crop.size == 0:
+            results.append((None, 0.0))
+            continue
+
+        try:
+            h, w = crop.shape[:2]
+            face_size = max(h, w)
+
+            # Resize lên tối thiểu 160x160 nếu quá nhỏ (Facenet cần ≥160px)
+            if face_size < FACE_MIN_PIXELS:
+                scale = FACE_MIN_PIXELS / face_size
+                crop = cv2.resize(
+                    crop, None, fx=scale, fy=scale,
+                    interpolation=cv2.INTER_CUBIC,
+                )
+
+            # opencv Haar cascade: rất nhanh trên crop nhỏ (~2-5ms)
+            # Cung cấp face alignment (xoay mắt ngang) → embedding chính xác hơn skip
+            emb_result = DeepFace.represent(
+                img_path=crop,
+                model_name=FACE_MODEL,
+                enforce_detection=False,
+                detector_backend="opencv",
+            )
+
+            if emb_result and len(emb_result) > 0:
+                conf = emb_result[0].get("face_confidence", 0)
+                if conf >= 0.3:  # Ngưỡng thấp hơn vì đã crop sẵn
+                    quality = min(1.0, max(0.2, (face_size - 40) / 120.0))
+                    results.append((emb_result[0]["embedding"], round(quality, 3)))
+                    continue
+
+            results.append((None, 0.0))
+        except Exception as e:
+            print(f"    [!] Crop embed error: {e}")
+            results.append((None, 0.0))
+
+    return results
+
+
+# ════════════════════════════════════════════════════════════
 #  SO KHỚP KHUÔN MẶT — PGVECTOR (SQL-level cosine distance)
 # ════════════════════════════════════════════════════════════
 

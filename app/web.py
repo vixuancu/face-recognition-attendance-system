@@ -100,7 +100,12 @@ def register_submit():
         return redirect(url_for("register_page"))
 
     if not files or len(files) == 0 or files[0].filename == "":
-        flash("Vui lòng chọn ít nhất 1 ảnh!", "error")
+        flash("Vui lòng chọn ít nhất 10 ảnh!", "error")
+        return redirect(url_for("register_page"))
+
+    valid_files = [f for f in files if f and f.filename]
+    if len(valid_files) < 10:
+        flash(f"Cần ít nhất 10 ảnh để đăng ký (bạn chọn {len(valid_files)} ảnh).", "error")
         return redirect(url_for("register_page"))
 
     # Lưu ảnh tạm

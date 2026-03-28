@@ -4,13 +4,17 @@
 {% block content %}
 <div style="text-align:center; margin-bottom: 2rem;">
     <h1 style="color: #1e3a5f; font-size: 1.8rem;">Hệ thống Điểm Danh Sinh Viên CNTT</h1>
-    <p style="color: #666; margin-top: 0.5rem;">Nhận diện khuôn mặt bằng DeepFace + PostgreSQL</p>
+    <p style="color: #666; margin-top: 0.5rem;">Nhận diện khuôn mặt bằng DeepFace + FastAPI + Redis + pgvector</p>
 </div>
 
 <div class="stats">
     <div class="stat-card">
         <div class="number">{{ total_students }}</div>
         <div class="label">Sinh viên đã đăng ký</div>
+    </div>
+    <div class="stat-card">
+        <div class="number">{{ total_courses }}</div>
+        <div class="label">Lớp tín chỉ</div>
     </div>
     <div class="stat-card">
         <div class="number">{{ total_sessions }}</div>
@@ -25,17 +29,22 @@
 <div class="card">
     <h2>Bắt đầu nhanh</h2>
     <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 1rem;">
-        <a href="/register" class="btn btn-primary" style="text-align:center; flex:1; min-width:200px; padding: 1.2rem;">
+        <a href="/register" class="btn btn-primary" style="text-align:center; flex:1; min-width:180px; padding: 1.2rem;">
             <div style="font-size: 2rem;">📸</div>
             <div style="margin-top: 0.5rem;">Đăng ký Sinh viên mới</div>
-            <div style="font-size: 0.8rem; font-weight: normal; opacity: 0.8; margin-top: 0.25rem;">Upload 5 ảnh khuôn mặt</div>
+            <div style="font-size: 0.8rem; font-weight: normal; opacity: 0.8; margin-top: 0.25rem;">Upload 10 ảnh khuôn mặt</div>
         </a>
-        <a href="/attendance" class="btn btn-success" style="text-align:center; flex:1; min-width:200px; padding: 1.2rem;">
+        <a href="/courses" class="btn btn-outline" style="text-align:center; flex:1; min-width:180px; padding: 1.2rem;">
+            <div style="font-size: 2rem;">📚</div>
+            <div style="margin-top: 0.5rem;">Quản lý Lớp tín chỉ</div>
+            <div style="font-size: 0.8rem; font-weight: normal; opacity: 0.8; margin-top: 0.25rem;">Tạo lớp, thêm SV</div>
+        </a>
+        <a href="/attendance" class="btn btn-success" style="text-align:center; flex:1; min-width:180px; padding: 1.2rem;">
             <div style="font-size: 2rem;">🎥</div>
             <div style="margin-top: 0.5rem;">Bắt đầu Điểm danh</div>
             <div style="font-size: 0.8rem; font-weight: normal; opacity: 0.8; margin-top: 0.25rem;">Mở camera nhận diện</div>
         </a>
-        <a href="/students" class="btn btn-outline" style="text-align:center; flex:1; min-width:200px; padding: 1.2rem;">
+        <a href="/students" class="btn btn-outline" style="text-align:center; flex:1; min-width:180px; padding: 1.2rem;">
             <div style="font-size: 2rem;">📋</div>
             <div style="margin-top: 0.5rem;">Danh sách Sinh viên</div>
             <div style="font-size: 0.8rem; font-weight: normal; opacity: 0.8; margin-top: 0.25rem;">Xem & quản lý</div>
