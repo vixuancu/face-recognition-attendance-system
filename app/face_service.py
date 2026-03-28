@@ -13,6 +13,15 @@ InsightFace buffalo_l:
 
 import logging
 import os
+
+# ── Giới hạn số Thread C++ (InsightFace/ONNXRuntime) để tránh chiếm hết CPU ──
+# Để phần CPU cho OpenCV làm tác vụ giải mã TCP Stream
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["OPENBLAS_NUM_THREADS"] = "2"
+os.environ["MKL_NUM_THREADS"] = "2"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
+os.environ["NUMEXPR_NUM_THREADS"] = "2"
+
 import shutil
 from typing import Optional
 

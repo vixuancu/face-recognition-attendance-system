@@ -8,7 +8,7 @@ from typing import Optional
 
 from app.config import (
     RTSP_PROCESS_INTERVAL, RTSP_RECONNECT_DELAY, RTSP_FRAME_WIDTH, RTSP_FRAME_HEIGHT,
-    RTSP_JPEG_QUALITY
+    RTSP_JPEG_QUALITY, RTSP_STREAM_FPS
 )
 from app.face_service import get_face_app, _match_from_cache, _compute_face_quality, save_attendance_record
 from app.ram_cache import get_cached_embeddings, is_attended, mark_attended
@@ -29,9 +29,12 @@ class CameraWorker:
         self._latest_frame = None
         self._annotated_frame = None
         self._latest_results = []
+        self._latest_jpeg_bytes = None
+        self._new_frame_event = threading.Event()
         
         self._thread_reader: Optional[threading.Thread] = None
         self._thread_processor: Optional[threading.Thread] = None
+        self._thread_encoder: Optional[threading.Thread] = None
         
         self._cap = None
         
@@ -43,8 +46,10 @@ class CameraWorker:
         self.running = True
         self._thread_reader = threading.Thread(target=self._reader_loop, daemon=True)
         self._thread_processor = threading.Thread(target=self._processor_loop, daemon=True)
+        self._thread_encoder = threading.Thread(target=self._encoder_loop, daemon=True)
         self._thread_reader.start()
         self._thread_processor.start()
+        self._thread_encoder.start()
         logger.info(f"Worker {self.camera_id} started")
 
     def stop(self):
@@ -55,27 +60,43 @@ class CameraWorker:
             self._thread_reader.join(timeout=2)
         if self._thread_processor:
             self._thread_processor.join(timeout=2)
+        if self._thread_encoder:
+            self._thread_encoder.join(timeout=2)
         logger.info(f"Worker {self.camera_id} stopped")
 
     def get_stream_frame(self) -> Optional[bytes]:
         with self._lock:
-            frame = self._annotated_frame if self._annotated_frame is not None else self._latest_frame
-            if frame is None:
-                return None
-            
-            # Encode to JPEG
-            ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), RTSP_JPEG_QUALITY])
-            if ret:
-                return buffer.tobytes()
-        return None
+            return self._latest_jpeg_bytes
 
     def get_latest_results(self) -> list:
         with self._lock:
             return self._latest_results.copy()
 
+    def _encoder_loop(self):
+        while self.running:
+            # Chờ có frame mới bắn tín hiệu (để bỏ qua sleep không chính xác của OS)
+            self._new_frame_event.wait(timeout=1.0)
+            self._new_frame_event.clear()
+
+            with self._lock:
+                frame = self._annotated_frame if self._annotated_frame is not None else self._latest_frame
+            
+            if frame is None:
+                continue
+
+            # Resize if needed for output web streaming
+            h, w = frame.shape[:2]
+            if w > RTSP_FRAME_WIDTH or h > RTSP_FRAME_HEIGHT:
+                frame = cv2.resize(frame, (RTSP_FRAME_WIDTH, RTSP_FRAME_HEIGHT))
+
+            ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), RTSP_JPEG_QUALITY])
+            if ret:
+                with self._lock:
+                    self._latest_jpeg_bytes = buffer.tobytes()
+
     def _reader_loop(self):
         while self.running:
-            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay"
             self._cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
             self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
@@ -95,13 +116,12 @@ class CameraWorker:
                     self.connected = False
                     break
 
-                # Resize if needed
-                h, w = frame.shape[:2]
-                if w > RTSP_FRAME_WIDTH or h > RTSP_FRAME_HEIGHT:
-                    frame = cv2.resize(frame, (RTSP_FRAME_WIDTH, RTSP_FRAME_HEIGHT))
-
+                # Không resize ở luồng đọc để tiết kiệm CPU cho TCP Decode
                 with self._lock:
                     self._latest_frame = frame
+                
+                # Báo cho encoder loop biết đã có hình
+                self._new_frame_event.set()
 
             if self._cap:
                 self._cap.release()

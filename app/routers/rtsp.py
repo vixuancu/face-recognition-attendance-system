@@ -116,7 +116,9 @@ def get_camera_status(camera_id: str):
 
 async def mjpeg_generator(camera_id: str):
     manager = get_worker_manager()
-    delay = 1.0 / RTSP_STREAM_FPS
+    # Check quickly, but don't overwhelm loop
+    delay = 1.0 / (RTSP_STREAM_FPS * 2) 
+    last_frame_bytes = None
     
     while True:
         worker = manager.get_worker(camera_id)
@@ -124,7 +126,8 @@ async def mjpeg_generator(camera_id: str):
             break
             
         frame_bytes = worker.get_stream_frame()
-        if frame_bytes:
+        if frame_bytes and frame_bytes != last_frame_bytes:
+            last_frame_bytes = frame_bytes
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
         
