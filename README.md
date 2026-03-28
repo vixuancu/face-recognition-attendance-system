@@ -106,32 +106,36 @@ face-recognition-attendance-system/
 ## 📦 Danh sách thư viện cần cài đặt (CHI TIẾT)
 
 ### Nhóm 1: Core AI / Computer Vision
-| Thư viện | Version | Công dụng |
-|---|---|---|
-| `insightface` | ≥ 0.7.3 | **Lõi AI.** Chứa model buffalo_l (SCRFD detector + ArcFace embedder). Trích xuất vector khuôn mặt 512 chiều. |
-| `onnxruntime` | ≥ 1.18.0 | Runtime thực thi model ONNX (InsightFace dùng ONNX format). Bắt buộc phải cài. |
-| `opencv-python` | ≥ 4.9.0 | Đọc/ghi ảnh, resize, padding, decode ảnh từ bytes. Là xương sống xử lý ảnh. |
-| `numpy` | ≥ 1.24, < 2.0 | Tính toán ma trận: cosine similarity, normalize vector. Dùng ở mọi nơi. |
+
+| Thư viện        | Version       | Công dụng                                                                                                    |
+| --------------- | ------------- | ------------------------------------------------------------------------------------------------------------ |
+| `insightface`   | ≥ 0.7.3       | **Lõi AI.** Chứa model buffalo_l (SCRFD detector + ArcFace embedder). Trích xuất vector khuôn mặt 512 chiều. |
+| `onnxruntime`   | ≥ 1.18.0      | Runtime thực thi model ONNX (InsightFace dùng ONNX format). Bắt buộc phải cài.                               |
+| `opencv-python` | ≥ 4.9.0       | Đọc/ghi ảnh, resize, padding, decode ảnh từ bytes. Là xương sống xử lý ảnh.                                  |
+| `numpy`         | ≥ 1.24, < 2.0 | Tính toán ma trận: cosine similarity, normalize vector. Dùng ở mọi nơi.                                      |
 
 ### Nhóm 2: Database
-| Thư viện | Version | Công dụng |
-|---|---|---|
-| `SQLAlchemy` | 2.0.36 | ORM — map Python class ↔ bảng PostgreSQL. Dùng query, insert, update. |
-| `psycopg2-binary` | 2.9.10 | Driver kết nối Python → PostgreSQL. Bắt buộc. |
-| `alembic` | 1.14.1 | Quản lý migration database (tạo/sửa bảng tự động). |
-| `pgvector` | ≥ 0.3.6 | Extension hỗ trợ kiểu `Vector(512)` trong SQLAlchemy + toán tử `<=>` cosine distance. |
+
+| Thư viện          | Version | Công dụng                                                                             |
+| ----------------- | ------- | ------------------------------------------------------------------------------------- |
+| `SQLAlchemy`      | 2.0.36  | ORM — map Python class ↔ bảng PostgreSQL. Dùng query, insert, update.                 |
+| `psycopg2-binary` | 2.9.10  | Driver kết nối Python → PostgreSQL. Bắt buộc.                                         |
+| `alembic`         | 1.14.1  | Quản lý migration database (tạo/sửa bảng tự động).                                    |
+| `pgvector`        | ≥ 0.3.6 | Extension hỗ trợ kiểu `Vector(512)` trong SQLAlchemy + toán tử `<=>` cosine distance. |
 
 ### Nhóm 3: Web Framework (FastAPI)
-| Thư viện | Version | Công dụng |
-|---|---|---|
-| `fastapi` | ≥ 0.115.0 | Web framework chính. Xử lý routing, dependency injection, background tasks. |
-| `uvicorn[standard]` | ≥ 0.34.0 | ASGI server chạy FastAPI. `[standard]` cài thêm `uvloop` + `httptools` cho hiệu năng. |
-| `python-multipart` | ≥ 0.0.9 | Parse form data (upload ảnh qua `multipart/form-data`). FastAPI yêu cầu. |
-| `jinja2` | ≥ 3.1.0 | Template engine — render HTML cho giao diện web test. |
+
+| Thư viện            | Version   | Công dụng                                                                             |
+| ------------------- | --------- | ------------------------------------------------------------------------------------- |
+| `fastapi`           | ≥ 0.115.0 | Web framework chính. Xử lý routing, dependency injection, background tasks.           |
+| `uvicorn[standard]` | ≥ 0.34.0  | ASGI server chạy FastAPI. `[standard]` cài thêm `uvloop` + `httptools` cho hiệu năng. |
+| `python-multipart`  | ≥ 0.0.9   | Parse form data (upload ảnh qua `multipart/form-data`). FastAPI yêu cầu.              |
+| `jinja2`            | ≥ 3.1.0   | Template engine — render HTML cho giao diện web test.                                 |
 
 ### Nhóm 4: Utilities
-| Thư viện | Version | Công dụng |
-|---|---|---|
+
+| Thư viện | Version  | Công dụng                                                    |
+| -------- | -------- | ------------------------------------------------------------ |
 | `Pillow` | ≥ 10.0.0 | Thao tác ảnh bổ sung (crop, convert format). Dùng gián tiếp. |
 
 ---
@@ -139,17 +143,20 @@ face-recognition-attendance-system/
 ## 🛠 Hướng dẫn cài đặt từng bước (Windows)
 
 ### Bước 0: Yêu cầu hệ thống
+
 - **Python 3.11** (bắt buộc — file `.whl` được build cho 3.11)
 - **PostgreSQL** đã cài và chạy (có extension `pgvector`)
 - **Git** (để clone repo)
 
 ### Bước 1: Clone dự án
+
 ```bash
 git clone <repo-url>
 cd face-recognition-attendance-system
 ```
 
 ### Bước 2: Tạo Virtual Environment
+
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
@@ -163,32 +170,38 @@ python -m venv .venv
 **Giải pháp 1: Dùng file `.whl` prebuilt (Nhanh nhất)**
 
 #### 3a. Tải file wheel prebuilt
+
 - **Link:** [insightface-0.7.3-cp311-cp311-win_amd64.whl](https://huggingface.co/hanamizuki-ai/insightface-releases/resolve/main/insightface-0.7.3-cp311-cp311-win_amd64.whl)
 - Mở trình duyệt → truy cập link → tải về → **copy file `.whl` vào thư mục gốc dự án**
 
 #### 3b. Cài từ file đã tải
+
 ```bash
 .venv\Scripts\pip install insightface-0.7.3-cp311-cp311-win_amd64.whl
 ```
 
 #### 3c. Cài ONNX Runtime
+
 ```bash
 .venv\Scripts\pip install onnxruntime
 ```
 
 **Giải pháp 2: Cài Visual Studio C++ Build Tools (Chính thống)**
 Nếu bạn không cài qua file `.whl` được, bạn sẽ bắt buộc phải cài trình biên dịch C++ của Microsoft:
+
 1. Tải [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/).
 2. Chạy file cài đặt, chọn mục **"Desktop development with C++"** (chú ý chọn bản có Windows 10/11 SDK).
 3. Đợi quá trình cài đặt hoàn tất (vài GB).
 4. Khởi động lại máy và chạy lại lệnh `pip install -r requirements.txt`.
 
 ### Bước 4: Cài các thư viện còn lại
+
 ```bash
 .venv\Scripts\pip install -r requirements.txt
 ```
 
 ### Bước 5: Kiểm tra cài đặt
+
 ```bash
 python -c "import insightface; print('InsightFace OK:', insightface.__version__)"
 python -c "import onnxruntime; print('ONNX Runtime OK:', onnxruntime.__version__)"
@@ -204,23 +217,31 @@ python -c "import cv2; print('OpenCV OK:', cv2.__version__)"
 > Nếu chạy server mà terminal báo lỗi này, tức là **PostgreSQL chưa được bật** hoặc đang chạy sai port. Hãy đảm bảo bạn đã cài PostgreSQL, nó đang được **Start** trong Services (Windows), và port 5432 trên localhost là đúng.
 
 ### 5a. Tạo PostgreSQL database
+
 Mở pgAdmin hoặc psql:
+
 ```sql
 CREATE DATABASE attendance_db;
 ```
 
 ### 5b. Cấu hình kết nối
+
 Mở file `app/config.py`, sửa dòng `DATABASE_URL`:
+
 ```python
 DATABASE_URL = "postgresql+psycopg2://username:password@localhost:5432/attendance_db"
 ```
-*Mặc định: user=`root`, password=`123456`*
+
+_Mặc định: user=`root`, password=`123456`_
 
 ### 5c. Chạy script khởi tạo bảng
+
 ```bash
 python init_db.py
 ```
+
 Script này tự động:
+
 1. Kiểm tra database `attendance_db` tồn tại chưa → tạo nếu chưa có
 2. Kích hoạt extension `pgvector`: `CREATE EXTENSION IF NOT EXISTS vector`
 3. Tạo tất cả 7 bảng từ ORM models
@@ -233,13 +254,13 @@ Script này tự động:
 uvicorn app.main:app --reload --port 8000
 ```
 
-| URL | Mô tả |
-|---|---|
-| `http://localhost:8000/` | Giao diện web (trang chủ) |
-| `http://localhost:8000/register` | Đăng ký sinh viên (upload ≥ 10 ảnh) |
-| `http://localhost:8000/attendance` | Trang điểm danh (webcam + MediaPipe) |
-| `http://localhost:8000/docs` | Swagger API docs (test API trực tiếp) |
-| `http://localhost:8000/health` | Health check + trạng thái cache |
+| URL                                | Mô tả                                 |
+| ---------------------------------- | ------------------------------------- |
+| `http://localhost:8000/`           | Giao diện web (trang chủ)             |
+| `http://localhost:8000/register`   | Đăng ký sinh viên (upload ≥ 10 ảnh)   |
+| `http://localhost:8000/attendance` | Trang điểm danh (webcam + MediaPipe)  |
+| `http://localhost:8000/docs`       | Swagger API docs (test API trực tiếp) |
+| `http://localhost:8000/health`     | Health check + trạng thái cache       |
 
 **Lưu ý:** Lần khởi chạy đầu tiên, server tự động load model InsightFace buffalo_l (~3-5 giây) ở background thread. Request đầu tiên không bị delay.
 
@@ -252,6 +273,7 @@ uvicorn app.main:app --reload --port 8000
 Hệ thống có **7 bảng**, chia 3 nhóm:
 
 #### Nhóm Sinh viên
+
 ```
 ┌─────────────────┐            ┌──────────────────────┐
 │    students      │ 1 ────── N │   student_photos      │
@@ -263,11 +285,13 @@ Hệ thống có **7 bảng**, chia 3 nhóm:
 │ created_at       │            │ created_at            │
 └─────────────────┘            └──────────────────────┘
 ```
+
 - Mỗi sinh viên có **nhiều ảnh** (khuyến nghị ≥ 10 ảnh).
 - Mỗi ảnh lưu **1 vector nhúng (embedding)** 512 chiều kiểu `Vector(512)` của pgvector.
 - Càng nhiều ảnh (góc khác nhau, ánh sáng khác nhau) → hệ thống nhận diện càng chuẩn.
 
 #### Nhóm Lớp tín chỉ
+
 ```
 ┌──────────────────┐          ┌──────────────────────┐
 │    courses        │ 1 ──── N │   course_schedules    │
@@ -290,10 +314,12 @@ Hệ thống có **7 bảng**, chia 3 nhóm:
 │ UNIQUE(course, student)│
 └──────────────────────┘
 ```
+
 - Mỗi lớp có lịch học (thứ, giờ bắt đầu/kết thúc).
 - Bảng `course_enrollments` là quan hệ N-N giữa sinh viên và lớp.
 
 #### Nhóm Điểm danh
+
 ```
 ┌───────────────────────┐          ┌──────────────────────┐
 │  attendance_sessions   │ 1 ──── N │  attendance_records   │
@@ -307,6 +333,7 @@ Hệ thống có **7 bảng**, chia 3 nhóm:
 └───────────────────────┘          │ UNIQUE(session, student)│
                                    └──────────────────────┘
 ```
+
 - Mỗi buổi học = 1 `attendance_session`.
 - Mỗi SV được điểm danh = 1 `attendance_record`, lưu kèm `confidence` (điểm cosine).
 - Constraint `UNIQUE(session_id, student_id)` đảm bảo **không điểm danh trùng**.
@@ -334,6 +361,7 @@ def get_face_app():
 ```
 
 **Giải thích:**
+
 - `buffalo_l` là bộ model chứa 2 thành phần:
   - **SCRFD** — Face Detection: phát hiện vị trí khuôn mặt trong ảnh (~10ms/frame)
   - **ArcFace** — Face Embedding: chuyển khuôn mặt thành vector 512 chiều (~80ms/frame)
@@ -357,6 +385,7 @@ Dùng khi **đăng ký sinh viên** (không cần realtime):
 ```
 
 **Logic chi tiết:**
+
 1. Đọc ảnh bằng OpenCV
 2. `app.get(img)` → trả về danh sách faces, mỗi face có: `bbox`, `det_score`, `embedding`
 3. Lấy mặt có `det_score` cao nhất (nếu ảnh có nhiều mặt)
@@ -368,7 +397,7 @@ Dùng khi **đăng ký sinh viên** (không cần realtime):
 Dùng cho endpoint `/recognize-fast`. Client đã crop sẵn mặt bằng MediaPipe:
 
 ```
-Face crop (từ MediaPipe) 
+Face crop (từ MediaPipe)
     ↓
 ┌─────────────── Strategy 1 (ưu tiên) ───────────────────┐
 │ Thêm padding 50% → SCRFD detect lại → Align → ArcFace │ ← Chất lượng CAO
@@ -381,7 +410,8 @@ Face crop (từ MediaPipe)
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Tại sao cần 2 strategy?**  
+**Tại sao cần 2 strategy?**
+
 - MediaPipe crop rất chặt (sát viền mặt) → SCRFD cần thêm context xung quanh (trán, cằm, tai) mới detect được.
 - Padding 50% = thêm viền đen xung quanh ảnh crop → SCRFD thấy đủ context → align chuẩn → embedding tốt.
 - Nếu vẫn fail → dùng thẳng ArcFace model, chấp nhận giảm chất lượng (nhân quality × 0.7).
@@ -429,13 +459,14 @@ Mỗi SV: lấy trung bình top-3 ảnh khớp nhất (aggregation)
 Xếp hạng: SV có agg_score cao nhất = best
     ↓
 Kiểm tra 3 điều kiện:
-    ├── (1) agg_score >= adaptive_threshold? 
+    ├── (1) agg_score >= adaptive_threshold?
     ├── (2) margin (best - second) >= 0.03?
     └── (3) Nếu cả 2 OK → ✓ MATCH, ngược lại → ✗ REJECT
 ```
 
 **Tại sao cần Margin Check?**  
 Giả sử SV A và SV B giống nhau (cùng kiểu tóc, cùng kính):
+
 - Nếu chỉ check threshold: SV A score=0.52, SV B score=0.50 → match SV A ✗ DỄ NHẦM
 - Với margin check: margin = 0.52 - 0.50 = 0.02 < 0.03 → **REJECT** ✓ AN TOÀN
 
@@ -468,6 +499,7 @@ _cache[course_id] = {
 ```
 
 **Tốc độ matching trên cache (~1-2ms):**
+
 ```python
 # Vectorized cosine similarity (numpy, KHÔNG loop Python)
 query_norm = query / norm(query)              # Normalize query
@@ -489,7 +521,8 @@ similarities = emb_normed @ query_norm         # Dot product = cosine sim
 #### 4.1. `attendance.py` — ★ ROUTER QUAN TRỌNG NHẤT
 
 **Endpoint 1: `POST /api/attendance/start`**  
-*Bắt đầu phiên điểm danh*
+_Bắt đầu phiên điểm danh_
+
 ```
 Input: { course_id: 1 }
 
@@ -505,13 +538,14 @@ Output: { session_id, total_students, cached_embeddings }
 ```
 
 **Endpoint 2: `POST /api/attendance/recognize`**  
-*Nhận diện từ full frame (server tự detect mặt)*
+_Nhận diện từ full frame (server tự detect mặt)_
+
 ```
 Input: session_id + image (full frame 640×480)
 
 Logic:
   1. Decode ảnh bytes → numpy array
-  2. InsightFace app.get(frame) → detect + embed TẤT CẢ mặt trong frame  
+  2. InsightFace app.get(frame) → detect + embed TẤT CẢ mặt trong frame
   3. Với mỗi mặt → _match_from_cache() so khớp trên RAM
   4. Nếu match:
      a. Kiểm tra đã điểm danh chưa (is_attended)
@@ -522,7 +556,8 @@ Output: { faces: [...], new_attended: [...], elapsed_ms }
 ```
 
 **Endpoint 3: `POST /api/attendance/recognize-fast`** ★ NHANH NHẤT  
-*Nhận diện từ face crops (client MediaPipe đã detect sẵn)*
+_Nhận diện từ face crops (client MediaPipe đã detect sẵn)_
+
 ```
 Input: session_id + faces[] (file uploads, mỗi file = 1 mặt crop)
        + face_positions (JSON vị trí trên frame)
@@ -542,7 +577,8 @@ Tại sao nhanh hơn /recognize?
 ```
 
 **Endpoint 4: `POST /api/attendance/stop`**  
-*Kết thúc phiên → clear cache*
+_Kết thúc phiên → clear cache_
+
 ```
 Logic:
   1. Lấy attended_set trước khi xóa
@@ -558,17 +594,17 @@ Logic:
 def _match_from_cache(face_embedding, cache_data, face_quality=1.0):
     # 1. Normalize query vector
     query_norm = query / norm(query)
-    
+
     # 2. Normalize tất cả cached embeddings
     emb_normed = emb_matrix / norms           # (N, 512)
-    
+
     # 3. Cosine similarity = dot product (đã normalize)
     similarities = emb_normed @ query_norm    # (N,) — ~1ms
-    
+
     # 4. Aggregate per student (trung bình top-3)
     for i, sim in enumerate(similarities):
         students[student_ids[i]]["scores"].append(sim)
-    
+
     # 5. Xếp hạng → best, second
     # 6. Adaptive threshold check
     # 7. Margin check (best.agg - second.agg >= 0.03)
@@ -577,13 +613,14 @@ def _match_from_cache(face_embedding, cache_data, face_quality=1.0):
 
 #### 4.2. `students.py` — CRUD Sinh viên
 
-| Endpoint | Method | Mô tả |
-|---|---|---|
-| `/api/students` | GET | Danh sách SV |
-| `/api/students/register` | POST | Đăng ký SV + upload ≥ 10 ảnh |
-| `/api/students/{id}` | DELETE | Xóa SV |
+| Endpoint                 | Method | Mô tả                        |
+| ------------------------ | ------ | ---------------------------- |
+| `/api/students`          | GET    | Danh sách SV                 |
+| `/api/students/register` | POST   | Đăng ký SV + upload ≥ 10 ảnh |
+| `/api/students/{id}`     | DELETE | Xóa SV                       |
 
 **Flow đăng ký SV:**
+
 ```
 Upload 10 ảnh → Lưu tạm vào tmp_uploads/
     ↓
@@ -599,14 +636,14 @@ face_service.register_student():
 
 #### 4.3. `courses.py` — CRUD Lớp tín chỉ
 
-| Endpoint | Method | Mô tả |
-|---|---|---|
-| `/api/courses` | GET/POST | Danh sách / Tạo lớp |
-| `/api/courses/{id}` | GET/DELETE | Chi tiết / Xóa lớp |
-| `/api/courses/{id}/schedules` | GET/POST | Lịch học |
-| `/api/courses/{id}/enrollments` | POST | Thêm 1 SV vào lớp |
-| `/api/courses/{id}/enrollments/bulk` | POST | Thêm nhiều SV vào lớp |
-| `/api/courses/{id}/students` | GET | Danh sách SV của lớp |
+| Endpoint                             | Method     | Mô tả                 |
+| ------------------------------------ | ---------- | --------------------- |
+| `/api/courses`                       | GET/POST   | Danh sách / Tạo lớp   |
+| `/api/courses/{id}`                  | GET/DELETE | Chi tiết / Xóa lớp    |
+| `/api/courses/{id}/schedules`        | GET/POST   | Lịch học              |
+| `/api/courses/{id}/enrollments`      | POST       | Thêm 1 SV vào lớp     |
+| `/api/courses/{id}/enrollments/bulk` | POST       | Thêm nhiều SV vào lớp |
+| `/api/courses/{id}/students`         | GET        | Danh sách SV của lớp  |
 
 #### 4.4. `pages.py` — Serve HTML
 
@@ -632,6 +669,7 @@ Trang này chứa logic JavaScript phía client:
 ```
 
 **Tại sao dùng MediaPipe ở client?**
+
 - Detect mặt ở browser bằng WebAssembly → ~5ms/frame, 30fps
 - Chỉ gửi mặt đã crop (~200×200) thay vì full frame (640×480)
 - Giảm bandwidth + giảm CPU server
@@ -711,23 +749,24 @@ Trang này chứa logic JavaScript phía client:
 
 ### `app/config.py` — Tất cả hằng số cấu hình
 
-| Hằng số | Giá trị | Ý nghĩa |
-|---|---|---|
-| `DATABASE_URL` | `postgresql+psycopg2://root:123456@...` | Chuỗi kết nối DB |
-| `INSIGHTFACE_MODEL` | `"buffalo_l"` | Tên model InsightFace |
-| `COSINE_THRESHOLD` | `0.45` | Ngưỡng cosine tối thiểu để nhận diện |
-| `FACE_CONFIDENCE_MIN` | `0.6` | Ngưỡng confidence phát hiện mặt (lọc false positive) |
-| `FACE_MIN_PIXELS` | `80` | Kích thước mặt tối thiểu (pixel). Dưới → quá xa |
-| `TOP_K_MATCHES` | `20` | Số kết quả lấy từ pgvector để phân tích |
-| `MATCH_MARGIN_MIN` | `0.03` | Khoảng cách tối thiểu giữa SV #1 và SV #2 |
-| `STUDENT_AGG_TOP_N` | `3` | Trung bình top-N ảnh tốt nhất mỗi SV |
-| `QUALITY_FACE_SIZE_GOOD` | `100` px | Mặt ≥ 100px → quality = 1.0 |
-| `QUALITY_FACE_SIZE_MIN` | `60` px | Mặt ≤ 60px → quality = 0.0 |
-| `QUALITY_THRESHOLD_PENALTY` | `0.08` | Penalty tối đa khi quality = 0 |
+| Hằng số                     | Giá trị                                 | Ý nghĩa                                              |
+| --------------------------- | --------------------------------------- | ---------------------------------------------------- |
+| `DATABASE_URL`              | `postgresql+psycopg2://root:123456@...` | Chuỗi kết nối DB                                     |
+| `INSIGHTFACE_MODEL`         | `"buffalo_l"`                           | Tên model InsightFace                                |
+| `COSINE_THRESHOLD`          | `0.45`                                  | Ngưỡng cosine tối thiểu để nhận diện                 |
+| `FACE_CONFIDENCE_MIN`       | `0.6`                                   | Ngưỡng confidence phát hiện mặt (lọc false positive) |
+| `FACE_MIN_PIXELS`           | `80`                                    | Kích thước mặt tối thiểu (pixel). Dưới → quá xa      |
+| `TOP_K_MATCHES`             | `20`                                    | Số kết quả lấy từ pgvector để phân tích              |
+| `MATCH_MARGIN_MIN`          | `0.03`                                  | Khoảng cách tối thiểu giữa SV #1 và SV #2            |
+| `STUDENT_AGG_TOP_N`         | `3`                                     | Trung bình top-N ảnh tốt nhất mỗi SV                 |
+| `QUALITY_FACE_SIZE_GOOD`    | `100` px                                | Mặt ≥ 100px → quality = 1.0                          |
+| `QUALITY_FACE_SIZE_MIN`     | `60` px                                 | Mặt ≤ 60px → quality = 0.0                           |
+| `QUALITY_THRESHOLD_PENALTY` | `0.08`                                  | Penalty tối đa khi quality = 0                       |
 
 ### `re_extract_embeddings.py` — Migration DeepFace → InsightFace
 
 Khi chuyển từ DeepFace (Facenet512) sang InsightFace (ArcFace), embedding cũ không tương thích:
+
 - Facenet512: norm ≈ 23, không gian vector khác
 - ArcFace: norm ≈ 1, không gian vector khác
 
@@ -758,6 +797,7 @@ Bản Flask cũ. Đã thay hoàn toàn bằng FastAPI (`app/main.py` + `app/rout
 ## 🚀 Cách áp dụng sang dự án khác
 
 ### Những gì bạn CẦN giữ (core)
+
 1. **`app/face_service.py`** — Copy nguyên. Đây là toàn bộ logic AI.
 2. **`app/ram_cache.py`** — Copy nguyên. Cache tối ưu tốc độ.
 3. **`app/config.py`** — Copy và sửa `DATABASE_URL`, các threshold theo nhu cầu.
@@ -765,6 +805,7 @@ Bản Flask cũ. Đã thay hoàn toàn bằng FastAPI (`app/main.py` + `app/rout
 5. **Logic `_match_from_cache()`** trong `app/routers/attendance.py` — thuật toán matching cốt lõi.
 
 ### Những gì bạn CÓ THỂ bỏ
+
 - `web.py`, `deepface_attendance.py`, `attendance_gui.py` — bản legacy.
 - `redis_client.py` — đã thay bằng RAM cache.
 - `templates/` — nếu frontend dùng React/Next.js thì không cần Jinja2.
