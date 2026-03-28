@@ -157,8 +157,10 @@ python -m venv .venv
 
 ### Bước 3: Cài InsightFace (QUAN TRỌNG — tránh lỗi C++ Build Tools)
 
-**Vấn đề:** `pip install insightface` trên Windows thường fail vì yêu cầu Visual Studio C++ Build Tools.  
-**Giải pháp:** Dùng file `.whl` prebuilt.
+> ⚠️ **LƯU Ý QUAN TRỌNG KHI CÀI ĐẶT TRÊN WINDOWS** ⚠️
+> Nếu bạn chạy thẳng `pip install -r requirements.txt` và gặp lỗi **`error: Microsoft Visual C++ 14.0 or greater is required. Get it with "Microsoft C++ Build Tools"`** đi kèm **`Building wheel for insightface (pyproject.toml) did not run successfully`**, hãy làm theo 1 trong 2 giải pháp dưới đây thay vì cài trực tiếp:
+
+**Giải pháp 1: Dùng file `.whl` prebuilt (Nhanh nhất)**
 
 #### 3a. Tải file wheel prebuilt
 - **Link:** [insightface-0.7.3-cp311-cp311-win_amd64.whl](https://huggingface.co/hanamizuki-ai/insightface-releases/resolve/main/insightface-0.7.3-cp311-cp311-win_amd64.whl)
@@ -173,6 +175,13 @@ python -m venv .venv
 ```bash
 .venv\Scripts\pip install onnxruntime
 ```
+
+**Giải pháp 2: Cài Visual Studio C++ Build Tools (Chính thống)**
+Nếu bạn không cài qua file `.whl` được, bạn sẽ bắt buộc phải cài trình biên dịch C++ của Microsoft:
+1. Tải [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/).
+2. Chạy file cài đặt, chọn mục **"Desktop development with C++"** (chú ý chọn bản có Windows 10/11 SDK).
+3. Đợi quá trình cài đặt hoàn tất (vài GB).
+4. Khởi động lại máy và chạy lại lệnh `pip install -r requirements.txt`.
 
 ### Bước 4: Cài các thư viện còn lại
 ```bash
@@ -190,6 +199,9 @@ python -c "import cv2; print('OpenCV OK:', cv2.__version__)"
 ---
 
 ## 🗄 Khởi tạo Database
+
+> ⚠️ **LỖI THƯỜNG GẶP:** `Connection refused (0x0000274D/10061)`
+> Nếu chạy server mà terminal báo lỗi này, tức là **PostgreSQL chưa được bật** hoặc đang chạy sai port. Hãy đảm bảo bạn đã cài PostgreSQL, nó đang được **Start** trong Services (Windows), và port 5432 trên localhost là đúng.
 
 ### 5a. Tạo PostgreSQL database
 Mở pgAdmin hoặc psql:

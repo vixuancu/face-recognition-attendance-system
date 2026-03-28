@@ -21,19 +21,22 @@ def index_page(request: Request, db: Session = Depends(get_db)):
     total_sessions = db.query(AttendanceSession).count()
     total_records = db.query(AttendanceRecord).count()
     total_courses = db.query(Course).count()
-    return templates.TemplateResponse("index.html", {
-        "request": request,
-        "total_students": total_students,
-        "total_sessions": total_sessions,
-        "total_records": total_records,
-        "total_courses": total_courses,
-    })
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={
+            "total_students": total_students,
+            "total_sessions": total_sessions,
+            "total_records": total_records,
+            "total_courses": total_courses,
+        }
+    )
 
 
 @router.get("/register")
 def register_page(request: Request):
     """Trang đăng ký sinh viên."""
-    return templates.TemplateResponse("register.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="register.html")
 
 
 @router.get("/students")
@@ -50,10 +53,11 @@ def students_page(request: Request, db: Session = Depends(get_db)):
             "num_photos": len(s.photos),
             "created_at": s.created_at.strftime("%d/%m/%Y") if s.created_at else "",
         })
-    return templates.TemplateResponse("students.html", {
-        "request": request,
-        "students": student_list,
-    })
+    return templates.TemplateResponse(
+        request=request,
+        name="students.html",
+        context={"students": students_list}
+    )
 
 
 @router.get("/attendance")
@@ -73,10 +77,11 @@ def attendance_page(request: Request, db: Session = Depends(get_db)):
             "room": c.room or "",
             "num_students": num_students,
         })
-    return templates.TemplateResponse("attendance.html", {
-        "request": request,
-        "courses": course_list,
-    })
+    return templates.TemplateResponse(
+        request=request,
+        name="attendance.html",
+        context={"courses": courses}
+    )
 
 
 @router.get("/courses")
@@ -96,10 +101,11 @@ def courses_page(request: Request, db: Session = Depends(get_db)):
             "semester": c.semester or "",
             "num_students": num_students,
         })
-    return templates.TemplateResponse("courses.html", {
-        "request": request,
-        "courses": course_list,
-    })
+    return templates.TemplateResponse(
+        request=request,
+        name="courses.html",
+        context={"courses": course_list}
+    )
 
 
 @router.get("/history")
@@ -130,7 +136,8 @@ def history_page(request: Request, db: Session = Depends(get_db)):
             "total": len(records),
             "records": record_details,
         })
-    return templates.TemplateResponse("history.html", {
-        "request": request,
-        "sessions": session_list,
-    })
+    return templates.TemplateResponse(
+        request=request,
+        name="history.html",
+        context={"sessions": session_list}
+    )
