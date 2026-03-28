@@ -40,11 +40,13 @@ from app.routers.students import router as students_router      # noqa: E402
 from app.routers.courses import router as courses_router        # noqa: E402
 from app.routers.attendance import router as attendance_router  # noqa: E402
 from app.routers.pages import router as pages_router            # noqa: E402
+from app.routers.rtsp import router as rtsp_router              # noqa: E402
 
 app.include_router(students_router)
 app.include_router(courses_router)
 app.include_router(attendance_router)
 app.include_router(pages_router)
+app.include_router(rtsp_router)
 
 
 def _warmup_insightface():
@@ -105,3 +107,10 @@ def cache_status_endpoint():
         "total_courses_cached": len(courses),
         "active_courses": courses,
     }
+# ── Shutdown ──
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("[SHUTDOWN] Stopping all RTSP workers...")
+    from app.rtsp_worker import get_worker_manager
+    get_worker_manager().stop_all()
+    logger.info("[SHUTDOWN] All RTSP workers stopped")

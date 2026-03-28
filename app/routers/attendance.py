@@ -31,7 +31,7 @@ from app.schemas import (
     FaceResult,
     AttendanceStatusResponse,
 )
-from app.face_service import extract_embeddings_from_crops
+from app.face_service import extract_embeddings_from_crops, _match_from_cache
 from app.ram_cache import (
     load_class_embeddings_to_cache,
     get_cached_embeddings,
@@ -39,12 +39,6 @@ from app.ram_cache import (
     is_attended,
     get_attended_set,
     clear_class_cache,
-)
-from app.config import (
-    COSINE_THRESHOLD,
-    MATCH_MARGIN_MIN,
-    STUDENT_AGG_TOP_N,
-    QUALITY_THRESHOLD_PENALTY,
 )
 
 logger = logging.getLogger("attendance")
@@ -90,114 +84,6 @@ def _bg_save_attendance(session_id: int, student_id: int, confidence: float):
     finally:
         db.close()
 
-
-# ════════════════════════════════════════════════════════════
-#  MATCHING TRÊN CACHE (numpy vectorized)
-# ════════════════════════════════════════════════════════════
-
-def _match_from_cache(
-    face_embedding: list,
-    cache_data: dict,
-    face_quality: float = 1.0,
-) -> tuple[Optional[dict], float, dict]:
-    """
-    So khớp khuôn mặt với embeddings đang ở trên Redis cache.
-    Dùng numpy vectorized cosine similarity (KHÔNG gọi DB).
-    Logic V2: aggregate per-student → margin check → adaptive threshold.
-
-    Args:
-        face_embedding: Vector 512D từ DeepFace
-        cache_data: Output của get_cached_embeddings()
-        face_quality: Điểm chất lượng [0.0 → 1.0]
-
-    Returns:
-        (match_info, score, debug_info) hoặc (None, 0.0, debug_info)
-    """
-    emb_matrix = cache_data["embeddings"]       # (N, 512)
-    student_ids = cache_data["student_ids"]      # List[int]
-    metadata = cache_data["metadata"]            # {sid: {name, code}}
-
-    if emb_matrix.size == 0:
-        return None, 0.0, {"reason": "empty_cache"}
-
-    # Vectorized cosine similarity
-    query = np.array(face_embedding, dtype=np.float32)
-    query_norm = query / (np.linalg.norm(query) + 1e-10)
-
-    norms = np.linalg.norm(emb_matrix, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    emb_normed = emb_matrix / norms
-
-    similarities = emb_normed @ query_norm  # (N,)
-
-    # ── Aggregate per student ──
-    students = {}
-    for i, sim in enumerate(similarities):
-        sid = student_ids[i]
-        if sid not in students:
-            meta = metadata.get(sid, {"student_code": "?", "full_name": "?"})
-            students[sid] = {
-                "student_id": sid,
-                "student_code": meta["student_code"],
-                "full_name": meta["full_name"],
-                "scores": [],
-            }
-        students[sid]["scores"].append(float(sim))
-
-    # Tính aggregated score
-    for info in students.values():
-        scores = sorted(info["scores"], reverse=True)
-        top_n = scores[:min(STUDENT_AGG_TOP_N, len(scores))]
-        info["agg_score"] = sum(top_n) / len(top_n)
-        info["max_score"] = scores[0]
-        info["n_photos_matched"] = len(scores)
-
-    # Xếp hạng
-    ranked = sorted(students.values(), key=lambda x: x["agg_score"], reverse=True)
-    best = ranked[0]
-    second = ranked[1] if len(ranked) >= 2 else None
-
-    # ── Adaptive threshold ──
-    penalty = (1.0 - face_quality) * QUALITY_THRESHOLD_PENALTY
-    effective_threshold = COSINE_THRESHOLD + penalty
-
-    # ── Margin check ──
-    margin = best["agg_score"] - (second["agg_score"] if second else 0.0)
-
-    debug_info = {
-        "face_quality": face_quality,
-        "effective_threshold": round(effective_threshold, 3),
-        "best_student": best["full_name"],
-        "best_agg_score": round(best["agg_score"], 4),
-        "margin": round(margin, 4),
-    }
-
-    # ── Quyết định ──
-    if best["agg_score"] < effective_threshold:
-        debug_info["reason"] = "below_threshold"
-        logger.warning(
-            f"[MATCH] ✗ REJECT — best={best['full_name']} "
-            f"agg={best['agg_score']:.4f} < threshold={effective_threshold:.3f} "
-            f"max={best['max_score']:.4f} quality={face_quality:.2f} "
-            f"n_photos={best['n_photos_matched']}"
-        )
-        return None, 0.0, debug_info
-
-    if second and margin < MATCH_MARGIN_MIN:
-        debug_info["reason"] = "margin_too_small"
-        logger.warning(
-            f"[MATCH] ✗ AMBIGUOUS — best={best['full_name']} "
-            f"agg={best['agg_score']:.4f} vs second={second['full_name']} "
-            f"agg={second['agg_score']:.4f} margin={margin:.4f}"
-        )
-        return None, 0.0, debug_info
-
-    debug_info["reason"] = "matched"
-    return {
-        "student_id": best["student_id"],
-        "student_code": best["student_code"],
-        "full_name": best["full_name"],
-    }, best["agg_score"], debug_info
 
 
 # ════════════════════════════════════════════════════════════

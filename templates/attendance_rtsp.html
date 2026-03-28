@@ -1,0 +1,437 @@
+{% extends "base.html" %}
+{% block title %}Điểm Danh Camera IP (RTSP){% endblock %}
+
+{% block extra_css %}
+.attendance-layout {
+    display: grid;
+    grid-template-columns: 1fr 350px;
+    gap: 1.5rem;
+}
+@media (max-width: 900px) {
+    .attendance-layout { grid-template-columns: 1fr; }
+}
+
+/* Camera */
+.camera-box {
+    position: relative;
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+    aspect-ratio: 16/9;
+}
+.camera-box img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+.camera-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(0,0,0,0.7));
+    padding: 1rem;
+    color: #fff;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.result-banner {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    padding: 0.8rem 2rem;
+    border-radius: 12px;
+    font-size: 1.2rem;
+    font-weight: 700;
+    animation: fadeInOut 2s ease;
+    pointer-events: none;
+    white-space: nowrap;
+}
+.result-banner.success { background: rgba(40, 167, 69, 0.9); color: #fff; }
+.result-banner.already { background: rgba(23, 162, 184, 0.85); color: #fff; }
+.result-banner.unknown { background: rgba(220, 53, 69, 0.85); color: #fff; }
+@keyframes fadeInOut {
+    0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
+    15%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    80%  { opacity: 1; }
+    100% { opacity: 0; }
+}
+
+/* Sidebar */
+.sidebar-card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    overflow: hidden;
+}
+.sidebar-header {
+    background: #1e3a5f;
+    color: #fff;
+    padding: 1rem;
+    text-align: center;
+}
+.sidebar-header .count {
+    font-size: 2rem;
+    font-weight: 700;
+}
+.attended-list {
+    max-height: 400px;
+    overflow-y: auto;
+    padding: 0.5rem;
+}
+.attended-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.6rem 0.8rem;
+    border-bottom: 1px solid #f0f0f0;
+    animation: slideIn 0.3s ease;
+}
+@keyframes slideIn {
+    from { opacity: 0; transform: translateX(-10px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+.attended-item .name { font-weight: 600; }
+.attended-item .meta { font-size: 0.8rem; color: #888; }
+
+/* Setup form */
+.setup-section { margin-bottom: 1.5rem; }
+
+/* Status indicator */
+.status-dot {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    margin-right: 6px;
+}
+.status-dot.active { background: #28a745; animation: pulse 1.5s infinite; }
+.status-dot.inactive { background: #dc3545; }
+.status-dot.waiting { background: #ffc107; animation: pulse 1s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* Course select styling */
+.course-select-card {
+    background: linear-gradient(135deg, #e8f4fd, #f0f7ff);
+    border: 2px solid #2c5f8a;
+}
+{% endblock %}
+
+{% block content %}
+<!-- BƯỚC 1: Setup phiên điểm danh -->
+<div class="card course-select-card" id="setupSection">
+    <h2>🎥 Thiết lập Camera IP (RTSP)</h2>
+
+    <div class="form-row">
+        <div class="form-group">
+            <label>Camera ID (không khoảng trắng) *</label>
+            <input type="text" id="cameraId" placeholder="VD: cam-phong-A305" value="cam-1">
+        </div>
+        <div class="form-group">
+            <label>RTSP URL *</label>
+            <input type="text" id="rtspUrl" placeholder="rtsp://admin:pass@192.168.../Streaming/..." required>
+        </div>
+    </div>
+
+    <!-- Chọn lớp tín chỉ -->
+    <div class="form-group" style="margin-bottom: 1.5rem;">
+        <label style="font-size: 1rem; color: #1e3a5f;">Chọn lớp tín chỉ *</label>
+        <select id="courseSelect" style="font-size: 1rem; padding: 0.8rem;">
+            <option value="">-- Chọn lớp --</option>
+            {% for c in courses %}
+            <option value="{{ c.id }}" data-name="{{ c.course_name }}" data-room="{{ c.room }}">
+                {{ c.course_code }} — {{ c.course_name }} ({{ c.room }}) — {{ c.num_students }} SV
+            </option>
+            {% endfor %}
+        </select>
+        {% if not courses %}
+        <p style="color: #dc3545; margin-top: 0.5rem; font-size: 0.9rem;">
+            ⚠️ Chưa có lớp tín chỉ nào. <a href="/courses">Tạo lớp mới</a> trước.
+        </p>
+        {% endif %}
+    </div>
+
+    <div class="form-row">
+        <div class="form-group">
+            <label>Tên buổi học (tuỳ chọn)</label>
+            <input type="text" id="sessionName" placeholder="VD: Lập trình Python - Buổi 5">
+        </div>
+        <div class="form-group">
+            <label>Ghi chú (tuỳ chọn)</label>
+            <input type="text" id="subject" placeholder="VD: Kiểm tra giữa kỳ">
+        </div>
+    </div>
+    <button class="btn btn-success" style="width:100%; padding:0.8rem; font-size:1.05rem;" onclick="startSession()">
+        🚀 Kết nối Camera & Điểm danh
+    </button>
+</div>
+
+<!-- BƯỚC 2: Camera + kết quả (ẩn ban đầu) -->
+<div id="attendanceSection" style="display: none;">
+    <!-- Info bar -->
+    <div class="card" style="padding: 0.8rem 1.5rem; background: #e8f4fd; display:flex; justify-content:space-between; align-items:center;">
+        <div>
+            <strong id="sessionInfo">—</strong>
+            <span style="margin-left:1rem; color:#666;" id="cacheInfo"></span>
+        </div>
+        <div style="font-size: 0.9rem; color: #444;">Camera ID: <b id="displayCamId">—</b></div>
+    </div>
+
+    <div class="attendance-layout">
+        <!-- Camera -->
+        <div>
+            <div class="card" style="padding: 0; overflow: hidden;">
+                <div class="camera-box" id="cameraBox">
+                    <img id="videoStream" src="" alt="Stream is loading..." style="display: none;">
+                    
+                    <div id="loadingOverlay" style="
+                        position:absolute; top:0; left:0; right:0; bottom:0;
+                        background: rgba(0,0,0,0.8);
+                        display:flex; flex-direction:column;
+                        align-items:center; justify-content:center;
+                        color:#fff; z-index:10; border-radius:12px;">
+                        <div style="font-size:2.5rem; margin-bottom:0.5rem;">📡</div>
+                        <div style="font-size:1.1rem; font-weight:600;" id="loadingText">Đang kết nối RTSP...</div>
+                        <div style="font-size:0.85rem; color:#ccc; margin-top:0.4rem;">
+                            Xin chờ giây lát để worker khởi chạy AI và đọc frame đầu tiên.
+                        </div>
+                    </div>
+
+                    <div class="camera-overlay">
+                        <div>
+                            <span class="status-dot waiting" id="connStatusDot"></span>
+                            <span id="connStatusText">Đang khởi tạo...</span>
+                        </div>
+                        <div style="font-size: 0.85rem; opacity: 0.8;">
+                            Mọi xử lý AI chạy trên Server
+                        </div>
+                    </div>
+                    <div id="resultBanner"></div>
+                </div>
+            </div>
+            <div style="margin-top:1rem; text-align:center;">
+                <button class="btn btn-danger" onclick="stopSession()">
+                    ⏹ Kết thúc điểm danh
+                </button>
+            </div>
+        </div>
+
+        <!-- Sidebar: danh sách đã điểm danh -->
+        <div>
+            <div class="sidebar-card">
+                <div class="sidebar-header">
+                    <div class="count" id="totalCount">0</div>
+                    <div>Sinh viên đã điểm danh</div>
+                </div>
+                <div class="attended-list" id="attendedList">
+                    <div style="text-align:center; padding: 2rem; color: #999;">
+                        Chưa có ai điểm danh
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let currentCameraId = null;
+let eventSource = null;
+
+// ════════════════════════════════════════════════════════════
+//  BƯỚC 1: KHỞI ĐỘNG WORKER VÀ BẮT ĐẦU STREAMING
+// ════════════════════════════════════════════════════════════
+async function startSession() {
+    const cameraId = document.getElementById('cameraId').value.trim();
+    const rtspUrl = document.getElementById('rtspUrl').value.trim();
+    const courseId = document.getElementById('courseSelect').value;
+    const sessionName = document.getElementById('sessionName').value.trim();
+    const subject = document.getElementById('subject').value.trim();
+
+    if (!cameraId || !rtspUrl || !courseId) { 
+        alert('Vui lòng điền đủ Target Camera ID, RTSP URL và Chọn lớp học!'); 
+        return; 
+    }
+
+    // Call API start endpoint
+    try {
+        const res = await fetch('/api/rtsp/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                camera_id: cameraId,
+                rtsp_url: rtspUrl,
+                course_id: parseInt(courseId),
+                session_name: sessionName || null,
+                subject: subject || null,
+            })
+        });
+        
+        // Cần lấy dạng json ngay cả khi lỗi
+        const data = await res.json();
+        if (res.status !== 200) {
+            alert(data.detail || 'Lỗi khởi động camera worker!');
+            return;
+        }
+
+        currentCameraId = cameraId;
+        
+        // Hide setup, show attendance section
+        document.getElementById('setupSection').style.display = 'none';
+        document.getElementById('attendanceSection').style.display = 'block';
+        
+        // Set info
+        document.getElementById('displayCamId').textContent = cameraId;
+        document.getElementById('sessionInfo').textContent = `📚 ${data.session_name}`;
+        document.getElementById('cacheInfo').textContent = `Cache: ${data.total_students} SV`;
+        
+        // Bật MJPEG Stream
+        const videoStream = document.getElementById('videoStream');
+        videoStream.src = `/api/rtsp/stream/${cameraId}?t=${new Date().getTime()}`;
+        
+        videoStream.onload = function() {
+            // Khi load được frame đầu tiên, tắt loading overlay
+            document.getElementById('loadingOverlay').style.display = 'none';
+            videoStream.style.display = 'block';
+        };
+
+        // Bắt đầu EventSource lắng nghe kết quả từ server
+        startSSE();
+
+    } catch (err) {
+        alert("Lỗi: " + err.message);
+    }
+}
+
+// ════════════════════════════════════════════════════════════
+//  BƯỚC 2: SERVER-SENT EVENTS ĐỂ NHẬN KẾT QUẢ REALTIME
+// ════════════════════════════════════════════════════════════
+function startSSE() {
+    if (eventSource) eventSource.close();
+    eventSource = new EventSource(`/api/rtsp/results/${currentCameraId}`);
+    
+    eventSource.onopen = function() {
+        console.log("SSE Connection opened");
+    };
+    
+    eventSource.onmessage = function(event) {
+        if (event.data === 'heartbeat') return; // Ignore heartbeat
+        
+        try {
+            const data = JSON.parse(event.data);
+            handleResult(data);
+        } catch (e) {}
+    };
+    
+    eventSource.onerror = function() {
+        console.error("SSE Connection Error");
+        updateConnStatus(false);
+    };
+}
+
+let lastReportedAttended = -1;
+
+function handleResult(data) {
+    updateConnStatus(data.connected);
+    
+    if (data.total_attended !== lastReportedAttended) {
+        document.getElementById('totalCount').textContent = data.total_attended;
+        lastReportedAttended = data.total_attended;
+    }
+    
+    // Tìm sinh viên nào vừa được mark attended
+    let newAttendedCount = 0;
+    if (data.faces && data.faces.length > 0) {
+        for (let f of data.faces) {
+            if (f.recognized && f.already_marked === false) {
+                // Chúng ta sẽ add vào list
+                newAttendedCount++;
+                addToList(f);
+                showBanner(`✓ ${f.full_name} (${f.confidence}%)`, 'success');
+            } else if (!f.recognized) {
+                // Tùy chọn hiển thị
+                // showBanner('Khuôn mặt không nhận ra', 'unknown');
+            }
+        }
+    }
+}
+
+function updateConnStatus(connected) {
+    const dot = document.getElementById('connStatusDot');
+    const txt = document.getElementById('connStatusText');
+    
+    if (connected) {
+        dot.className = 'status-dot active';
+        txt.textContent = 'Camera kết nối tốt';
+    } else {
+        dot.className = 'status-dot inactive';
+        txt.textContent = 'Mất kết nối Camera';
+        document.getElementById('loadingOverlay').style.display = 'flex';
+        document.getElementById('loadingText').textContent = 'Đang cố kết nối lại RTSP...';
+    }
+}
+
+// ════════════════════════════════════════════════════════════
+//  BƯỚC 3: XỬ LÝ GIAO DIỆN CHUNG
+// ════════════════════════════════════════════════════════════
+
+function showBanner(text, type) {
+    const banner = document.getElementById('resultBanner');
+    banner.className = 'result-banner ' + type;
+    banner.textContent = text;
+    banner.style.animation = 'none';
+    void banner.offsetHeight; // trigger reflow
+    banner.style.animation = '';
+}
+
+function addToList(data) {
+    const list = document.getElementById('attendedList');
+    // Clear placeholder initial
+    if (list.querySelector('div[style]')) list.innerHTML = '';
+    
+    const item = document.createElement('div');
+    item.className = 'attended-item';
+    item.innerHTML = `
+        <div>
+            <div class="name">${data.full_name}</div>
+            <div class="meta">${data.student_code}</div>
+        </div>
+        <div style="text-align:right;">
+            <span class="badge badge-success">${data.confidence}%</span>
+        </div>`;
+    list.insertBefore(item, list.firstChild);
+}
+
+// ════════════════════════════════════════════════════════════
+//  BƯỚC 4: KẾT THÚC PHIÊN VÀ DỪNG CAMERA
+// ════════════════════════════════════════════════════════════
+async function stopSession() {
+    if (!currentCameraId) return;
+
+    if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+    }
+    document.getElementById('videoStream').src = '';
+
+    try {
+        const res = await fetch('/api/rtsp/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ camera_id: currentCameraId })
+        });
+        const data = await res.json();
+        
+        alert(`Kết thúc phiên! Tổng: ${data.total_attended} sinh viên đã điểm danh.`);
+        location.reload();
+    } catch (err) {
+        alert("Có lỗi khi đóng phiên!");
+    }
+}
+
+// Nếu user đổi RTSP default trong config, hiển thị placeholder
+// Ở đây giữ cứng cho dev
+</script>
+{% endblock %}

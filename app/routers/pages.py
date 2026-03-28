@@ -80,7 +80,30 @@ def attendance_page(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
         request=request,
         name="attendance.html",
-        context={"courses": courses}
+        context={"courses": course_list}
+    )
+
+@router.get("/attendance-rtsp")
+def attendance_rtsp_page(request: Request, db: Session = Depends(get_db)):
+    """Trang điểm danh bằng camera IP (RTSP)."""
+    # Lấy danh sách lớp để hiển thị dropdown
+    courses = db.query(Course).order_by(Course.course_code).all()
+    course_list = []
+    for c in courses:
+        num_students = db.query(CourseEnrollment).filter(
+            CourseEnrollment.course_id == c.id
+        ).count()
+        course_list.append({
+            "id": c.id,
+            "course_code": c.course_code,
+            "course_name": c.course_name,
+            "room": c.room or "",
+            "num_students": num_students,
+        })
+    return templates.TemplateResponse(
+        request=request,
+        name="attendance_rtsp.html",
+        context={"courses": course_list}
     )
 
 

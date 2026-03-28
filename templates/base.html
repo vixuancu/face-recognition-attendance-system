@@ -235,8 +235,13 @@
         >
         <a
           href="/attendance"
-          class="{% if '/attendance' in request.url.path %}active{% endif %}"
-          >Điểm danh</a
+          class="{% if request.url.path == '/attendance' %}active{% endif %}"
+          >Điểm danh Webcam</a
+        >
+        <a
+          href="/attendance-rtsp"
+          class="{% if request.url.path == '/attendance-rtsp' %}active{% endif %}"
+          >Camera IP</a
         >
         <a
           href="/history"

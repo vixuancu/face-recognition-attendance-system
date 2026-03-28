@@ -31,5 +31,14 @@ QUALITY_FACE_SIZE_GOOD    = 100   # Ở ≤2m, face ≥ 100px → quality = 1.0 
 QUALITY_FACE_SIZE_MIN     = 60    # Face 60-100px → quality tỷ lệ. < 60 → quá xa (trước 40)
 QUALITY_THRESHOLD_PENALTY = 0.08  # Giảm penalty vì ≤2m mặt luôn đủ lớn (trước 0.10)
 
+# ─── RTSP Camera Configuration ──────────────────────────────
+RTSP_DEFAULT_URL      = os.getenv("RTSP_URL", "")
+RTSP_PROCESS_INTERVAL = 1.5      # Xử lý AI mỗi 1.5 giây (đủ cho ≤2m)
+RTSP_RECONNECT_DELAY  = 3.0      # Chờ 3s trước khi reconnect 
+RTSP_STREAM_FPS       = 15       # FPS MJPEG stream gửi browser (tiết kiệm bandwidth)
+RTSP_FRAME_WIDTH      = 1280     # Resize frame input → 720p
+RTSP_FRAME_HEIGHT     = 720      # (InsightFace det_size=640 nên 720p là đủ)
+RTSP_JPEG_QUALITY     = 80       # Chất lượng JPEG cho stream (%)
+
 # Tạo thư mục Images nếu chưa có
 os.makedirs(IMAGES_DIR, exist_ok=True)
